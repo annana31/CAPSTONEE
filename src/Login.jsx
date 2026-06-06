@@ -1,21 +1,31 @@
 import { useState } from "react";
 import "./styles/Login.css";
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onStudentAccess }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
   return (
     <div className="login-page">
-      <img src="/ustp.jpg" alt="USTP Campuses" className="login-bg" />
+      <img
+        src="/ustp.jpg"
+        alt="USTP Campuses"
+        className="login-bg"
+      />
       <div className="login-overlay" />
 
       <div className="login-center">
         <div className="login-card">
 
           <div className="login-brand-wrapper">
-            <h1 className="login-brand-title">RegisScan</h1>
-            <p className="login-brand-sub">Document and Request Management System</p>
+            <h1 className="login-brand-title">
+              RegisScan
+            </h1>
+
+            <p className="login-brand-sub">
+              Document and Request Management System
+            </p>
+
             <div className="login-brand-accent" />
           </div>
 
@@ -25,7 +35,9 @@ export default function Login({ onLogin }) {
                 type="text"
                 placeholder="Username"
                 value={username}
-                onChange={e => setUsername(e.target.value)}
+                onChange={(e) =>
+                  setUsername(e.target.value)
+                }
                 className="login-input"
               />
             </div>
@@ -37,14 +49,20 @@ export default function Login({ onLogin }) {
                 type="password"
                 placeholder="Password"
                 value={password}
-                onChange={e => setPassword(e.target.value)}
+                onChange={(e) =>
+                  setPassword(e.target.value)
+                }
                 className="login-input"
               />
             </div>
           </div>
 
           <button
-            onClick={() => onLogin && onLogin(username || "Maria Santos")}
+            onClick={() =>
+              onLogin(
+                username || "Maria Santos"
+              )
+            }
             className="login-btn"
           >
             Log in
@@ -52,15 +70,27 @@ export default function Login({ onLogin }) {
 
           <div className="login-divider-wrapper">
             <div className="login-divider-line" />
-            <span className="login-divider-text">or</span>
+            <span className="login-divider-text">
+              or
+            </span>
             <div className="login-divider-line" />
           </div>
 
-          <p className="login-guest-note">Some courses may allow student access</p>
-          <button className="login-student-btn">Access as Student</button>
+          <p className="login-guest-note">
+            Some courses may allow student access
+          </p>
+
+          <button
+            className="login-student-btn"
+            onClick={onStudentAccess}
+          >
+            Access as Student
+          </button>
 
           <div className="login-admin-link">
-            <button className="login-admin-btn">Admin</button>
+            <button className="login-admin-btn">
+              Admin
+            </button>
           </div>
 
         </div>

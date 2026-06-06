@@ -126,7 +126,7 @@
 }
 
 .modal-label {
-  @apply block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5;
+  @apply block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-4;
 }
 
 .modal-input {
@@ -146,7 +146,7 @@
 }
 
 .modal-extract-btn {
-  @apply w-full border-2 border-dashed border-[#1a1a6e]/30 rounded-lg px-4 py-4 text-sm text-[#1a1a6e] font-semibold text-center transition-colors cursor-pointer mb-5;
+  @apply w-full border-2 border-dashed border-[#1a1a6e]/30 rounded-lg px-4 py-4 text-sm text-[#1a1a6e] font-semibold text-center transition-colors cursor-pointer mb-100;
 }
 
 .modal-extract-btn:hover {
@@ -158,7 +158,7 @@
 }
 
 .modal-cancel-btn {
-  @apply px-5 py-2.5 text-sm font-semibold text-gray-500 rounded-lg transition-colors;
+  @apply px-5 py-2.5 text-sm font-semibold text-gray-500 rounded-lg transition-colors mt-5;
 }
 
 .modal-cancel-btn:hover {
@@ -166,7 +166,7 @@
 }
 
 .modal-submit-btn {
-  @apply px-6 py-2.5 text-sm font-semibold bg-[#e6a817] text-white rounded-lg transition-colors;
+  @apply px-6 py-2.5 text-sm font-semibold bg-[#e6a817] text-white rounded-lg transition-colors mt-5;
 }
 
 .modal-submit-btn:hover {

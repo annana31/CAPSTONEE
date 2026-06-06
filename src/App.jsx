@@ -2,9 +2,11 @@ import { useState } from "react";
 import Login from "./Login";
 import Dashboard from "./Dashboard";
 import Students from "./Students";
+import StudentPreview from "./StudentPreview";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [studentMode, setStudentMode] = useState(false);
   const [staffName, setStaffName] = useState("");
   const [activePage, setActivePage] = useState("Dashboard");
 
@@ -13,16 +15,56 @@ export default function App() {
     setLoggedIn(true);
   };
 
+  const handleStudentAccess = () => {
+    setStudentMode(true);
+  };
+
+  if (studentMode) {
+    return (
+      <StudentPreview
+        onBack={() => setStudentMode(false)}
+      />
+    );
+  }
+
   if (!loggedIn) {
-    return <Login onLogin={handleLogin} />;
+    return (
+      <Login
+        onLogin={handleLogin}
+        onStudentAccess={handleStudentAccess}
+      />
+    );
   }
 
   const renderPage = () => {
     switch (activePage) {
-      case "Students": return <Students />;
-      case "Departments": return <div className="flex flex-col items-center justify-center h-full text-center"><h2 className="empty-title">Departments</h2><p className="empty-sub">This page is under construction.</p><div className="empty-accent" /></div>;
-      case "Requests": return <div className="flex flex-col items-center justify-center h-full text-center"><h2 className="empty-title">Requests</h2><p className="empty-sub">This page is under construction.</p><div className="empty-accent" /></div>;
-      default: return null;
+      case "Students":
+        return <Students />;
+
+      case "Departments":
+        return (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <h2 className="empty-title">Departments</h2>
+            <p className="empty-sub">
+              This page is under construction.
+            </p>
+            <div className="empty-accent" />
+          </div>
+        );
+
+      case "Requests":
+        return (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <h2 className="empty-title">Requests</h2>
+            <p className="empty-sub">
+              This page is under construction.
+            </p>
+            <div className="empty-accent" />
+          </div>
+        );
+
+      default:
+        return null;
     }
   };
 
@@ -31,7 +73,10 @@ export default function App() {
       staffName={staffName}
       activePage={activePage}
       setActivePage={setActivePage}
-      onLogout={() => { setLoggedIn(false); setActivePage("Dashboard"); }}
+      onLogout={() => {
+        setLoggedIn(false);
+        setActivePage("Dashboard");
+      }}
     >
       {renderPage()}
     </Dashboard>
