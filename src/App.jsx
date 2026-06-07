@@ -2,7 +2,10 @@ import { useState } from "react";
 import Login from "./Login";
 import Dashboard from "./Dashboard";
 import Students from "./Students";
+import Departments from "./Departments";
 import StudentPreview from "./StudentPreview";
+import StudentProfile from "./StudentProfile";
+import Requests from "./Requests";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -39,28 +42,20 @@ export default function App() {
   const renderPage = () => {
     switch (activePage) {
       case "Students":
-        return <Students />;
+        return <Students onViewStudent={() => setActivePage("StudentProfile")} />;
 
       case "Departments":
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <h2 className="empty-title">Departments</h2>
-            <p className="empty-sub">
-              This page is under construction.
-            </p>
-            <div className="empty-accent" />
-          </div>
-        );
+        return <Departments onViewStudent={() => setActivePage("StudentProfile")} />;
 
       case "Requests":
+        return <Requests />;
+
+      case "StudentProfile":
         return (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <h2 className="empty-title">Requests</h2>
-            <p className="empty-sub">
-              This page is under construction.
-            </p>
-            <div className="empty-accent" />
-          </div>
+          <StudentProfile
+            staffName={staffName}
+            onLogout={() => setLoggedIn(false)}
+          />
         );
 
       default:

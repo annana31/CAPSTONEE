@@ -90,9 +90,6 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
 
             {dropdownOpen && (
               <div className="topbar-dropdown">
-                <button className="topbar-dropdown-profile" onClick={() => setDropdownOpen(false)}>
-                  Profile
-                </button>
                 <button className="topbar-dropdown-logout" onClick={() => { setDropdownOpen(false); onLogout(); }}>
                   Logout
                 </button>
