@@ -8,6 +8,8 @@ import StudentProfile from "./StudentProfile";
 import Requests from "./Requests";
 import AdminDashboard from "./AdminDashboard";
 import StaffAccounts from "./StaffAccounts";
+import SystemReports from "./SystemReports";
+import AuditLogs from "./AuditLogs";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -45,17 +47,14 @@ export default function App() {
   if (isAdmin) {
     const renderAdminPage = () => {
       switch (activePage) {
-        case "Staff Accounts": return <StaffAccounts />;
+        case "Staff Accounts":
+          return <StaffAccounts />;
         case "System Reports":
+          return <SystemReports />;
         case "Audit Logs":
-          return (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <h2 className="admin-empty-title">{activePage}</h2>
-              <p className="admin-empty-sub">This page is under construction.</p>
-              <div className="admin-empty-accent" />
-            </div>
-          );
-        default: return null; // AdminDashboard renders its own dashboard content
+          return <AuditLogs />;
+        default:
+          return null;
       }
     };
 
