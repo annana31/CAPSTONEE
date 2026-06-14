@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./styles/StudentProfile.css";
 import "./styles/Dashboard.css";
+import OCRConfirmation from "./OCRConfirmation";
 
 const departments = ["CEA", "CITC", "CSM", "CSTE", "COT", "COM", "SHS"];
 
@@ -59,7 +60,7 @@ const credStatusClass = (status) => {
 
 const verifiedCount = (creds) => creds.filter(c => c.status === "Verified").length;
 
-export default function StudentProfile({ staffName = "Ana Reyes", onLogout, setActivePage: setActivePageProp }) {
+export default function StudentProfile({ staffName = "Ana Reyes", onLogout }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activePage, setActivePage] = useState("Students");
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -68,6 +69,7 @@ export default function StudentProfile({ staffName = "Ana Reyes", onLogout, setA
   const [credentials, setCredentials] = useState(initialCredentials);
 
   const [showScanModal, setShowScanModal] = useState(false);
+  const [showOCRConfirmation, setShowOCRConfirmation] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewCred, setPreviewCred] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -91,6 +93,26 @@ export default function StudentProfile({ staffName = "Ana Reyes", onLogout, setA
   const handlePreview = (cred) => {
     setPreviewCred(cred);
     setShowPreviewModal(true);
+  };
+
+  const handleOCRSave = (data) => {
+    // Update student record with OCR-extracted data
+    setStudent(prev => ({
+      ...prev,
+      name: data.studentName || prev.name,
+      id: data.studentId || prev.id,
+    }));
+
+    // Mark the matching credential as verified with today's date
+    setCredentials(prev =>
+      prev.map(c =>
+        c.name === data.documentType
+          ? { ...c, status: "Verified", date: new Date().toISOString().slice(0, 10), file: `${data.documentType.toLowerCase().replace(/\s+/g, "_")}.pdf` }
+          : c
+      )
+    );
+
+    setShowOCRConfirmation(false);
   };
 
   const initials = student.name.split(" ").map(n => n[0]).join("").slice(0, 2);
@@ -261,12 +283,25 @@ export default function StudentProfile({ staffName = "Ana Reyes", onLogout, setA
             <p className="scan-modal-sub">Choose how you want to add a credential document.</p>
 
             <label className="scan-option-btn block">
-              <p className="scan-option-title">Upload Document</p>
-              <p className="scan-option-sub">Select a file from your computer (PDF, JPG, PNG)</p>
-              <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={() => setShowScanModal(false)} />
-            </label>
+  <p className="scan-option-title">Upload Document</p>
+  <p className="scan-option-sub">Select a file from your computer (PDF, JPG, PNG)</p>
+  <input
+    type="file"
+    accept=".pdf,.jpg,.jpeg,.png"
+    className="hidden"
+    onChange={(e) => {
+      if (e.target.files[0]) {
+        setShowScanModal(false);
+        setShowOCRConfirmation(true);
+      }
+    }}
+  />
+</label>
 
-            <button className="scan-option-btn w-full text-left" onClick={() => setShowScanModal(false)}>
+            <button
+              className="scan-option-btn w-full text-left"
+              onClick={() => { setShowScanModal(false); setShowOCRConfirmation(true); }}
+            >
               <p className="scan-option-title">Scan Document</p>
               <p className="scan-option-sub">Use the OCR scanner to capture and extract document data</p>
             </button>
@@ -276,6 +311,14 @@ export default function StudentProfile({ staffName = "Ana Reyes", onLogout, setA
             </button>
           </div>
         </div>
+      )}
+
+      {/* OCR CONFIRMATION MODAL */}
+      {showOCRConfirmation && (
+        <OCRConfirmation
+          onCancel={() => setShowOCRConfirmation(false)}
+          onSave={handleOCRSave}
+        />
       )}
 
       {/* PREVIEW MODAL */}
