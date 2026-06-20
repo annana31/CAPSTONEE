@@ -1,4 +1,5 @@
 import { useState } from "react";
+import axios from "axios";
 
 const requestTypes = [
   { label: "Authentication (₱5/page)", value: "Authentication", price: 5 },
@@ -13,51 +14,146 @@ const requestTypes = [
   { label: "Transcript of Records (₱125/page)", value: "Transcript of Records", price: 125 },
 ];
 
-const cavChoices = [
-  "BFP", "BJMP", "CHED", "DEP-ED", "DFA", "PNP", "POEA",
-];
+const cavChoices = ["BFP", "BJMP", "CHED", "DEP-ED", "DFA", "PNP", "POEA"];
 
 const certificationChoices = [
-  "Authorization Letter",
-  "CAR",
-  "Earned Units",
-  "Endorsement",
-  "English: Medium of Instruction",
-  "GPA",
-  "Grading System",
-  "Graduated",
-  "Letter of No Objection",
-  "Officially Enrolled",
-  "Subjects Enrolled",
-  "Subjects with Grade",
-  "USTP Conversion",
-  "Others",
+  "Authorization Letter", "CAR", "Earned Units", "Endorsement",
+  "English: Medium of Instruction", "GPA", "Grading System", "Graduated",
+  "Letter of No Objection", "Officially Enrolled", "Subjects Enrolled",
+  "Subjects with Grade", "USTP Conversion", "Others",
 ];
 
+const documentIdMap = {
+  "Authentication":        1,
+  "CAV Certification":     2,
+  "Certification":         3,
+  "Correction of Name":    4,
+  "Diploma Replacement":   5,
+  "Evaluation":            6,
+  "Form 137":              7,
+  "Honorable Dismissal":   8,
+  "Permit to Study":       9,
+  "Transcript of Records": 10,
+};
+
+const yearLevelMap = {
+  1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year",
+};
+
 export default function StudentPreview({ onBack }) {
+  // ── Search state ──────────────────────────────────────────────
   const [studentId, setStudentId] = useState("");
-  const [showForm, setShowForm] = useState(false);
+  const [requests,  setRequests]  = useState([]);
+  const [showForm,  setShowForm]  = useState(false);
+
+  // ── Form state ────────────────────────────────────────────────
+  const [formStudentId, setFormStudentId] = useState("");
+  const [fullName,      setFullName]      = useState("");
+  const [email,         setEmail]         = useState("");
+  const [course,        setCourse]        = useState("");
+  const [yearLevel,     setYearLevel]     = useState("");
+  const [purpose,       setPurpose]       = useState("");
+  const [studentFound,  setStudentFound]  = useState(false);
 
   const [requestType, setRequestType] = useState("CAV Certification");
-  const [cavChoice, setCavChoice] = useState("");
-  const [cavOther, setCavOther] = useState("");
-  const [certChoice, setCertChoice] = useState("");
-  const [certOther, setCertOther] = useState("");
-  const [subjectSem, setSubjectSem] = useState("");
-  const [subjectSY1, setSubjectSY1] = useState("");
-  const [subjectSY2, setSubjectSY2] = useState("");
+  const [cavChoice,   setCavChoice]   = useState("");
+  const [cavOther,    setCavOther]    = useState("");
+  const [certChoice,  setCertChoice]  = useState("");
+  const [certOther,   setCertOther]   = useState("");
+  const [subjectSem,  setSubjectSem]  = useState("");
+  const [subjectSY1,  setSubjectSY1]  = useState("");
+  const [subjectSY2,  setSubjectSY2]  = useState("");
 
-  const requests = [
-    { id: "20230001", requestType: "Transcript of Records", status: "Pending",  date: "June 6, 2026" },
-    { id: "20230001", requestType: "Certification",         status: "Approved", date: "June 2, 2026" },
-  ];
+  const [submitting,    setSubmitting]    = useState(false);
+  const [fetchingStudent, setFetchingStudent] = useState(false);
 
-  const studentRequests = requests.filter(r => r.id === studentId);
+  // ── Style helpers ─────────────────────────────────────────────
+  const inputClass     = "border border-gray-300 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full";
+  const readOnlyClass  = "border border-gray-200 p-3 rounded-lg text-sm w-full bg-gray-50 text-gray-500 cursor-not-allowed";
+  const selectClass    = "w-full border border-gray-300 p-3 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm bg-white";
+  const labelClass     = "block text-xs font-bold text-[#0A2342] uppercase tracking-widest mb-1.5";
 
-  const inputClass = "border border-gray-300 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full";
-  const selectClass = "w-full border border-gray-300 p-3 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm bg-white";
-  const labelClass = "block text-xs font-bold text-[#0A2342] uppercase tracking-widest mb-1.5";
+  // ── Helpers ───────────────────────────────────────────────────
+  const resetForm = () => {
+    setFormStudentId(""); setFullName(""); setEmail("");
+    setCourse(""); setYearLevel(""); setPurpose("");
+    setStudentFound(false);
+    setRequestType("CAV Certification");
+    setCavChoice(""); setCavOther("");
+    setCertChoice(""); setCertOther("");
+    setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
+  };
 
+  // ── Fetch student info ────────────────────────────────────────
+  const fetchStudent = async (id) => {
+    if (!id.trim()) return;
+    setFetchingStudent(true);
+    try {
+      const res = await axios.get(`/api/student/${id}`);
+      const s = res.data;
+      const name = [s.first_name, s.middle_name, s.last_name].filter(Boolean).join(" ");
+      setFullName(name);
+      setEmail(s.email ?? "");
+      setCourse(s.program_name ?? "");
+      setYearLevel(yearLevelMap[s.year_level] ?? "");
+      setStudentFound(true);
+    } catch {
+      setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
+      setStudentFound(false);
+      alert("Student not found. Please check the Student ID.");
+    } finally {
+      setFetchingStudent(false);
+    }
+  };
+
+  // ── API calls ─────────────────────────────────────────────────
+  const searchRequest = async () => {
+    if (!studentId.trim()) return;
+    try {
+      const res = await axios.get(`/api/request/student/${studentId}`);
+      setRequests(res.data);
+    } catch (error) {
+      console.error(error.response?.data ?? error.message);
+      alert("Could not fetch requests. Check your Student ID.");
+    }
+  };
+
+  const submitRequest = async () => {
+    if (!formStudentId.trim()) return alert("Please enter a Student ID.");
+    if (!studentFound)         return alert("Please enter a valid Student ID to auto-fill your details.");
+    if (!purpose.trim())       return alert("Please state the purpose of your request.");
+
+    const docId = documentIdMap[requestType];
+    if (!docId) return alert("Unknown request type.");
+
+    const data = {
+      student_id:  parseInt(formStudentId, 10),
+      document_id: docId,
+      documents:   [docId],
+      purpose:     purpose,
+    };
+
+    setSubmitting(true);
+    try {
+      await axios.post("/api/request", data);
+      alert("Request submitted successfully!");
+      resetForm();
+      setShowForm(false);
+      if (studentId === formStudentId) searchRequest();
+    } catch (error) {
+      console.error(error.response?.data ?? error.message);
+      alert("Error: " + (error.response?.data?.message ?? "Something went wrong"));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Derived ───────────────────────────────────────────────────
+  const studentRequests = requests.filter(
+    r => String(r.student_id) === String(studentId)
+  );
+
+  // ── Render ────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-100 px-6 py-12">
       <div className="max-w-4xl mx-auto">
@@ -86,9 +182,13 @@ export default function StudentPreview({ onBack }) {
               placeholder="Enter Student ID"
               value={studentId}
               onChange={e => setStudentId(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && searchRequest()}
               className="flex-1 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm"
             />
-            <button className="bg-[#0A2342] hover:bg-[#081b34] text-white px-6 py-3 rounded-xl font-medium transition text-sm">
+            <button
+              onClick={searchRequest}
+              className="bg-[#0A2342] text-white px-6 py-3 rounded-xl font-semibold hover:bg-[#0d2e57] transition"
+            >
               Search
             </button>
           </div>
@@ -103,42 +203,83 @@ export default function StudentPreview({ onBack }) {
         {/* Request Form */}
         {showForm && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
-            <h2 className="text-xl font-black text-[#0A2342] mb-6 tracking-tight">Request Form</h2>
+            <h2 className="text-xl font-black text-[#0A2342] mb-6 tracking-tight">
+              Request Form
+            </h2>
 
             <div className="grid md:grid-cols-2 gap-5">
 
-              <div>
+              {/* Student ID (form) */}
+              <div className="md:col-span-2">
                 <label className={labelClass}>Student ID</label>
-                <input className={inputClass} placeholder="e.g. 2023301715" />
+                <div className="flex gap-3">
+                  <input
+                    className={inputClass}
+                    placeholder="e.g. 2023301715"
+                    value={formStudentId}
+                    onChange={e => {
+                      setFormStudentId(e.target.value);
+                      setStudentFound(false);
+                      setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
+                    }}
+                    onBlur={() => fetchStudent(formStudentId)}
+                    onKeyDown={e => e.key === "Enter" && fetchStudent(formStudentId)}
+                  />
+                  {fetchingStudent && (
+                    <span className="self-center text-xs text-gray-400 whitespace-nowrap">
+                      Looking up…
+                    </span>
+                  )}
+                  {studentFound && (
+                    <span className="self-center text-xs text-green-600 font-semibold whitespace-nowrap">
+                      ✓ Found
+                    </span>
+                  )}
+                </div>
               </div>
 
+              {/* Full Name — read only */}
               <div>
                 <label className={labelClass}>Full Name</label>
-                <input className={inputClass} placeholder="Full Name" />
+                <input
+                  className={readOnlyClass}
+                  value={fullName}
+                  placeholder="Auto-filled from Student ID"
+                  readOnly
+                />
               </div>
 
-              <div className="md:col-span-2">
+              {/* Email — read only */}
+              <div>
                 <label className={labelClass}>Email Address</label>
-                <input type="email" className={inputClass} placeholder="e.g. juan@ustp.edu.ph" />
+                <input
+                  className={readOnlyClass}
+                  value={email}
+                  placeholder="Auto-filled from Student ID"
+                  readOnly
+                />
               </div>
 
+              {/* Course — read only */}
               <div>
                 <label className={labelClass}>Course</label>
-                <input className={inputClass} placeholder="e.g. BS Information Technology" />
+                <input
+                  className={readOnlyClass}
+                  value={course}
+                  placeholder="Auto-filled from Student ID"
+                  readOnly
+                />
               </div>
 
+              {/* Year Level — read only */}
               <div>
                 <label className={labelClass}>Year Level</label>
-                <div className="relative">
-                  <select className={selectClass}>
-                    <option>1st Year</option>
-                    <option>2nd Year</option>
-                    <option>3rd Year</option>
-                    <option>4th Year</option>
-                    <option>5th Year</option>
-                  </select>
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
-                </div>
+                <input
+                  className={readOnlyClass}
+                  value={yearLevel}
+                  placeholder="Auto-filled from Student ID"
+                  readOnly
+                />
               </div>
 
               {/* Request Type */}
@@ -150,13 +291,9 @@ export default function StudentPreview({ onBack }) {
                     value={requestType}
                     onChange={e => {
                       setRequestType(e.target.value);
-                      setCavChoice("");
-                      setCavOther("");
-                      setCertChoice("");
-                      setCertOther("");
-                      setSubjectSem("");
-                      setSubjectSY1("");
-                      setSubjectSY2("");
+                      setCavChoice(""); setCavOther("");
+                      setCertChoice(""); setCertOther("");
+                      setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
                     }}
                   >
                     {requestTypes.map(r => (
@@ -167,7 +304,7 @@ export default function StudentPreview({ onBack }) {
                 </div>
               </div>
 
-              {/* CAV Certification sub-choice */}
+              {/* CAV sub-choice */}
               {requestType === "CAV Certification" && (
                 <div className="md:col-span-2">
                   <label className={labelClass}>Requesting Agency</label>
@@ -178,9 +315,7 @@ export default function StudentPreview({ onBack }) {
                       onChange={e => { setCavChoice(e.target.value); setCavOther(""); }}
                     >
                       <option value="">Select Agency</option>
-                      {cavChoices.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
+                      {cavChoices.map(c => <option key={c} value={c}>{c}</option>)}
                       <option value="Other">Other (Please Specify)</option>
                     </select>
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
@@ -207,50 +342,34 @@ export default function StudentPreview({ onBack }) {
                     <select
                       className={selectClass}
                       value={certChoice}
-                      onChange={e => { setCertChoice(e.target.value); setCertOther(""); setSubjectSem(""); setSubjectSY1(""); setSubjectSY2(""); }}
+                      onChange={e => {
+                        setCertChoice(e.target.value); setCertOther("");
+                        setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
+                      }}
                     >
                       <option value="">Select Type</option>
-                      {certificationChoices.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
+                      {certificationChoices.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
                   </div>
 
-                  {/* Subjects with Grade fields */}
                   {certChoice === "Subjects with Grade" && (
                     <div className="mt-3 grid grid-cols-3 gap-3">
                       <div>
                         <label className={labelClass}>Semester</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 1st"
-                          value={subjectSem}
-                          onChange={e => setSubjectSem(e.target.value)}
-                        />
+                        <input className={inputClass} placeholder="e.g. 1st" value={subjectSem} onChange={e => setSubjectSem(e.target.value)} />
                       </div>
                       <div>
                         <label className={labelClass}>S.Y. Start</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 2023"
-                          value={subjectSY1}
-                          onChange={e => setSubjectSY1(e.target.value)}
-                        />
+                        <input className={inputClass} placeholder="e.g. 2023" value={subjectSY1} onChange={e => setSubjectSY1(e.target.value)} />
                       </div>
                       <div>
                         <label className={labelClass}>S.Y. End</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 2024"
-                          value={subjectSY2}
-                          onChange={e => setSubjectSY2(e.target.value)}
-                        />
+                        <input className={inputClass} placeholder="e.g. 2024" value={subjectSY2} onChange={e => setSubjectSY2(e.target.value)} />
                       </div>
                     </div>
                   )}
 
-                  {/* Others specify */}
                   {certChoice === "Others" && (
                     <div className="mt-3">
                       <label className={labelClass}>Please Specify</label>
@@ -272,13 +391,19 @@ export default function StudentPreview({ onBack }) {
                   className={inputClass}
                   rows="4"
                   placeholder="State the purpose of your request"
+                  value={purpose}
+                  onChange={e => setPurpose(e.target.value)}
                 />
               </div>
 
             </div>
 
-            <button className="mt-6 bg-[#D4A017] hover:bg-[#be9114] text-white px-8 py-3 rounded-xl font-semibold text-sm transition">
-              Submit Request
+            <button
+              onClick={submitRequest}
+              disabled={submitting || !studentFound}
+              className="mt-6 bg-[#D4A017] text-white px-8 py-3 rounded-xl font-semibold hover:bg-[#b8891a] transition disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {submitting ? "Submitting…" : "Submit Request"}
             </button>
           </div>
         )}
@@ -299,8 +424,10 @@ export default function StudentPreview({ onBack }) {
                       className="bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex justify-between items-center"
                     >
                       <div>
-                        <p className="font-bold text-[#0A2342] text-sm">{request.requestType}</p>
-                        <p className="text-gray-400 text-xs mt-0.5">Submitted: {request.date}</p>
+                        <p className="font-bold text-[#0A2342] text-sm">{request.document_name}</p>
+                        <p className="text-gray-400 text-xs mt-0.5">
+                          Submitted: {new Date(request.date_request).toLocaleDateString()}
+                        </p>
                       </div>
                       <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide ${
                         request.status === "Approved"
