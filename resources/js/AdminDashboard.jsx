@@ -1,86 +1,32 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "./supabaseClient";
 import "./styles/AdminDashboard.css";
 
-
 const navItems = ["Dashboard", "Staff Accounts", "System Reports", "Audit Logs"];
-
-const stats = [
-  { label: "Total Registrar Staff", value: "5", sub: "+1 this month" },
-  { label: "Total Student Records", value: "11,953", sub: "+87 this month" },
-  { label: "Completed Requests", value: "1,284", sub: "96.2% resolution rate" },
-  { label: "Archived Documents", value: "42,717", sub: "Last: 24 min ago" },
-];
-
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DONUT_COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ec4899", "#3b82f6", "#e6a817", "#a78bfa", "#f87171", "#14b8a6", "#eab308"];
 
-const barData = [
-  { uploads: 28, archived: 45 },
-  { uploads: 38, archived: 55 },
-  { uploads: 42, archived: 62 },
-  { uploads: 48, archived: 70 },
-  { uploads: 55, archived: 82 },
-  { uploads: 60, archived: 88 },
-  { uploads: 65, archived: 95 },
-  { uploads: 90, archived: 110 },
-  { uploads: 72, archived: 92 },
-  { uploads: 80, archived: 100 },
-  { uploads: 68, archived: 85 },
-  { uploads: 75, archived: 90 },
-];
-
-const credentialDist = [
-  { label: "Birth Certificate", value: 312, color: "#6366f1" },
-  { label: "Form 138", value: 298, color: "#22c55e" },
-  { label: "Form 137", value: 245, color: "#f59e0b" },
-  { label: "Good Moral", value: 287, color: "#ec4899" },
-  { label: "Grades", value: 331, color: "#3b82f6" },
-  { label: "TOR", value: 178, color: "#e6a817" },
-  { label: "LOA", value: 54, color: "#a78bfa" },
-  { label: "Withdrawal", value: 32, color: "#f87171" },
-];
-
-const totalCreds = credentialDist.reduce((s, c) => s + c.value, 0);
-
-const activities = [
-  { staff: "Juan dela Cruz", action: "Uploaded Form 137", student: "Maria Luisa Santos", date: "Jun 7, 2025", time: "9:14 AM" },
-  { staff: "Ana Reyes",      action: "Archived Birth Certificate", student: "Carlo Antonio Reyes", date: "Jun 7, 2025", time: "8:54 AM" },
-  { staff: "Juan dela Cruz", action: "Approved TOR Request", student: "Angela Faith Tan", date: "Jun 7, 2025", time: "8:28 AM" },
-  { staff: "Lorna Bautista", action: "Added Student Record", student: "Pio Mangubat", date: "Jun 7, 2025", time: "7:42 AM" },
-  { staff: "Marco Santos",   action: "Rejected Request", student: "Leo Fernandez", date: "Jun 7, 2025", time: "6:58 AM" },
-  { staff: "Ana Reyes",      action: "Updated Profile", student: "Rosa Lim", date: "Jun 7, 2025", time: "4:32 AM" },
-];
-
-// ── BAR CHART ──
 function BarChart({ data, months }) {
-  const svgWidth = 580;
-  const svgHeight = 220;
-  const paddingLeft = 40;
-  const paddingRight = 16;
-  const paddingTop = 16;
-  const paddingBottom = 36;
+  const svgWidth = 580, svgHeight = 220, paddingLeft = 40, paddingRight = 16, paddingTop = 16, paddingBottom = 36;
   const chartWidth = svgWidth - paddingLeft - paddingRight;
   const chartHeight = svgHeight - paddingTop - paddingBottom;
-  const maxVal = Math.max(...data.map(d => d.archived)) * 1.15;
+  const maxRaw = Math.max(...data.map(d => Math.max(d.uploads, d.archived)), 0);
+  const maxVal = maxRaw > 0 ? maxRaw * 1.15 : 10;
   const barGroupWidth = chartWidth / data.length;
   const barWidth = barGroupWidth * 0.28;
-  const yTicks = [0, 30, 60, 90, 120];
+  const yTicks = [0, Math.round(maxVal * 0.25), Math.round(maxVal * 0.5), Math.round(maxVal * 0.75), Math.round(maxVal)];
 
   return (
-    <svg
-      viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-      className="admin-bar-chart-svg-wrapper"
-      preserveAspectRatio="xMidYMid meet"
-    >
-      {yTicks.map(tick => {
+    <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="admin-bar-chart-svg-wrapper" preserveAspectRatio="xMidYMid meet">
+      {yTicks.map((tick, idx) => {
         const y = paddingTop + chartHeight - (tick / maxVal) * chartHeight;
         return (
-          <g key={tick}>
+          <g key={idx}>
             <line x1={paddingLeft} y1={y} x2={svgWidth - paddingRight} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
             <text x={paddingLeft - 8} y={y + 4} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.25)">{tick}</text>
           </g>
         );
       })}
-
       {data.map((d, i) => {
         const groupX = paddingLeft + i * barGroupWidth;
         const centerX = groupX + barGroupWidth / 2;
@@ -96,67 +42,143 @@ function BarChart({ data, months }) {
           </g>
         );
       })}
-
       <line x1={paddingLeft} y1={paddingTop + chartHeight} x2={svgWidth - paddingRight} y2={paddingTop + chartHeight} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
     </svg>
   );
 }
 
-// ── DONUT CHART ──
 function DonutChart({ data, total }) {
-  const size = 160;
-  const cx = size / 2;
-  const cy = size / 2;
-  const r = 58;
-  const innerR = 38;
+  const size = 160, cx = size / 2, cy = size / 2, r = 58, innerR = 38;
   let cumulativePercent = 0;
-
   const slices = data.map((item) => {
     const percent = item.value / total;
     const startAngle = cumulativePercent * 2 * Math.PI - Math.PI / 2;
     const endAngle = (cumulativePercent + percent) * 2 * Math.PI - Math.PI / 2;
-    const x1 = cx + r * Math.cos(startAngle);
-    const y1 = cy + r * Math.sin(startAngle);
-    const x2 = cx + r * Math.cos(endAngle);
-    const y2 = cy + r * Math.sin(endAngle);
-    const ix1 = cx + innerR * Math.cos(startAngle);
-    const iy1 = cy + innerR * Math.sin(startAngle);
-    const ix2 = cx + innerR * Math.cos(endAngle);
-    const iy2 = cy + innerR * Math.sin(endAngle);
+    const x1 = cx + r * Math.cos(startAngle), y1 = cy + r * Math.sin(startAngle);
+    const x2 = cx + r * Math.cos(endAngle), y2 = cy + r * Math.sin(endAngle);
+    const ix1 = cx + innerR * Math.cos(startAngle), iy1 = cy + innerR * Math.sin(startAngle);
+    const ix2 = cx + innerR * Math.cos(endAngle), iy2 = cy + innerR * Math.sin(endAngle);
     const largeArc = percent > 0.5 ? 1 : 0;
     const d = [`M ${x1} ${y1}`, `A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`, `L ${ix2} ${iy2}`, `A ${innerR} ${innerR} 0 ${largeArc} 0 ${ix1} ${iy1}`, "Z"].join(" ");
     cumulativePercent += percent;
     return { d, color: item.color };
   });
-
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      {slices.map((slice, i) => (
-        <path key={i} d={slice.d} fill={slice.color} opacity={0.85} />
-      ))}
+      {slices.map((slice, i) => <path key={i} d={slice.d} fill={slice.color} opacity={0.85} />)}
     </svg>
   );
 }
 
-// ── ADMIN DASHBOARD ──
-export default function AdminDashboard({
-  staffName = "Admin",
-  onLogout,
-  activePage,
-  setActivePage,
-  children
-}) {
+export default function AdminDashboard({ staffName = "Admin", onLogout, activePage, setActivePage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-
-  const today = new Date().toLocaleDateString("en-US", {
-    weekday: "short", year: "numeric", month: "short", day: "numeric",
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [stats, setStats] = useState({
+    staffCount: 0, studentCount: 0, activeStudentCount: 0,
+    completedRequests: 0, totalRequestDocs: 0, archivedDocuments: 0, lastArchivedDate: null,
   });
+  const [barData, setBarData] = useState(months.map(() => ({ uploads: 0, archived: 0 })));
+  const [credentialDist, setCredentialDist] = useState([]);
+  const [activities, setActivities] = useState([]);
+
+  const today = new Date().toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDashboard() {
+      setLoading(true);
+      setErrorMsg("");
+      try {
+        const [staffRes, studentRes, activeStudentRes, completedReqRes, totalReqDocsRes, studentDocsRes, activitiesRes] = await Promise.all([
+          supabase.from("tbl_staff").select("*", { count: "exact", head: true }).neq("user_role", "Admin"),
+          supabase.from("tbl_student").select("*", { count: "exact", head: true }),
+          supabase.from("tbl_student").select("*", { count: "exact", head: true }).ilike("status", "Active"),
+          supabase.from("tbl_request_document").select("*", { count: "exact", head: true }).ilike("status", "Completed"),
+          supabase.from("tbl_request_document").select("*", { count: "exact", head: true }),
+          supabase.from("tbl_student_documents").select("document_name, date_uploaded, status"),
+          supabase.from("tbl_system_activity")
+            .select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff ( username )`)
+            .order("date_time", { ascending: false }).limit(6),
+        ]);
+
+        if (!isMounted) return;
+        const firstError = [staffRes, studentRes, activeStudentRes, completedReqRes, totalReqDocsRes, studentDocsRes, activitiesRes].find(r => r.error);
+        if (firstError) throw firstError.error;
+
+        const docs = studentDocsRes.data || [];
+        const archivedDocs = docs.filter(d => (d.status || "").toLowerCase() === "archived");
+        const archivedCount = archivedDocs.length;
+        const lastArchivedDate = archivedDocs.map(d => d.date_uploaded).filter(Boolean).sort((a, b) => new Date(b) - new Date(a))[0] || null;
+
+        const currentYear = new Date().getFullYear();
+        const monthly = months.map(() => ({ uploads: 0, archived: 0 }));
+        docs.forEach((d) => {
+          if (!d.date_uploaded) return;
+          const dt = new Date(d.date_uploaded);
+          if (dt.getFullYear() !== currentYear) return;
+          const m = dt.getMonth();
+          monthly[m].uploads += 1;
+          if ((d.status || "").toLowerCase() === "archived") monthly[m].archived += 1;
+        });
+
+        const counts = {};
+        docs.forEach((d) => {
+          const name = d.document_name || "Unspecified";
+          counts[name] = (counts[name] || 0) + 1;
+        });
+        const distArray = Object.entries(counts)
+          .map(([label, value], i) => ({ label, value, color: DONUT_COLORS[i % DONUT_COLORS.length] }))
+          .sort((a, b) => b.value - a.value);
+
+        const mappedActivities = (activitiesRes.data || []).map((a) => ({
+          staff: a.tbl_staff?.username || "Unknown Staff",
+          action: a.activity_description,
+          student: a.module_name,
+          date: a.date_time ? new Date(a.date_time).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" }) : "—",
+          time: a.date_time ? new Date(a.date_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
+        }));
+
+        setStats({
+          staffCount: staffRes.count ?? 0,
+          studentCount: studentRes.count ?? 0,
+          activeStudentCount: activeStudentRes.count ?? 0,
+          completedRequests: completedReqRes.count ?? 0,
+          totalRequestDocs: totalReqDocsRes.count ?? 0,
+          archivedDocuments: archivedCount,
+          lastArchivedDate,
+        });
+        setBarData(monthly);
+        setCredentialDist(distArray);
+        setActivities(mappedActivities);
+      } catch (err) {
+        if (isMounted) setErrorMsg(err.message || "Failed to load dashboard data");
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    loadDashboard();
+    return () => { isMounted = false; };
+  }, []);
+
+  const totalCreds = credentialDist.reduce((s, c) => s + c.value, 0);
+  const resolutionRate = stats.totalRequestDocs > 0 ? Math.round((stats.completedRequests / stats.totalRequestDocs) * 1000) / 10 : 0;
+  const lastArchivedText = stats.lastArchivedDate
+    ? `Last: ${new Date(stats.lastArchivedDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : "No documents archived yet";
+
+  const statCards = [
+    { label: "Total Registrar Staff", value: stats.staffCount.toLocaleString(), sub: `${stats.staffCount} staff account${stats.staffCount === 1 ? "" : "s"}` },
+    { label: "Total Student Records", value: stats.studentCount.toLocaleString(), sub: `${stats.activeStudentCount} active` },
+    { label: "Completed Requests", value: stats.completedRequests.toLocaleString(), sub: stats.totalRequestDocs > 0 ? `${resolutionRate}% resolution rate` : "No requests yet" },
+    { label: "Archived Documents", value: stats.archivedDocuments.toLocaleString(), sub: lastArchivedText },
+  ];
 
   return (
     <div className="admin-layout">
-
-      {/* SIDEBAR */}
       <aside className="admin-sidebar" style={{ width: sidebarOpen ? "240px" : "0px" }}>
         <div className="admin-sidebar-brand">
           <h1 className="admin-sidebar-brand-title">RegisScan</h1>
@@ -165,11 +187,7 @@ export default function AdminDashboard({
         <p className="admin-sidebar-section-label">Admin Panel</p>
         <nav className="admin-sidebar-nav">
           {navItems.map(item => (
-            <button
-              key={item}
-              onClick={() => setActivePage(item)}
-              className={activePage === item ? "admin-sidebar-nav-item-active" : "admin-sidebar-nav-item"}
-            >
+            <button key={item} onClick={() => setActivePage(item)} className={activePage === item ? "admin-sidebar-nav-item-active" : "admin-sidebar-nav-item"}>
               {item}
             </button>
           ))}
@@ -179,10 +197,7 @@ export default function AdminDashboard({
         </div>
       </aside>
 
-      {/* MAIN */}
       <div className="admin-main">
-
-        {/* TOPBAR */}
         <header className="admin-topbar">
           <div className="admin-topbar-left">
             <button onClick={() => setSidebarOpen(!sidebarOpen)} className="admin-topbar-toggle">
@@ -192,33 +207,23 @@ export default function AdminDashboard({
             </button>
             <span className="admin-topbar-date">{today}</span>
           </div>
-
           <div className="admin-topbar-right">
             <div className="relative">
               <button onClick={() => setDropdownOpen(!dropdownOpen)} className="admin-topbar-staff-btn">
-                <div className="admin-topbar-avatar">
-                  {staffName.split(" ").map(n => n[0]).join("").slice(0, 2)}
-                </div>
+                <div className="admin-topbar-avatar">{staffName.split(" ").map(n => n[0]).join("").slice(0, 2)}</div>
                 <span className="admin-topbar-staff-name">{staffName}</span>
               </button>
               {dropdownOpen && (
                 <div className="admin-topbar-dropdown" style={{ top: "48px" }}>
-              <button 
-                className="admin-topbar-dropdown-logout" 
-                onMouseDown={async (e) => { 
-                  e.preventDefault();
-                  await onLogout();      
-                }}
-              >
-                Logout
-              </button>
+                  <button className="admin-topbar-dropdown-logout" onClick={() => { setDropdownOpen(false); onLogout && onLogout(); }}>
+                    Logout
+                  </button>
                 </div>
               )}
             </div>
           </div>
         </header>
 
-        {/* CONTENT */}
         <main className="admin-content">
           {activePage === "Dashboard" && (
             <>
@@ -227,19 +232,19 @@ export default function AdminDashboard({
                 <p className="admin-page-sub">System overview and analytics</p>
               </div>
 
-              {/* Stat Cards */}
+              {errorMsg && <p style={{ color: "#f87171", marginBottom: "1rem" }}>Couldn't load dashboard data: {errorMsg}</p>}
+
               <div className="admin-stats-grid">
-                {stats.map((s, i) => (
+                {statCards.map((s, i) => (
                   <div key={i} className="admin-stat-card">
                     <p className="admin-stat-label">{s.label}</p>
-                    <p className="admin-stat-value">{s.value}</p>
-                    <p className="admin-stat-sub">{s.sub}</p>
+                    <p className="admin-stat-value">{loading ? "—" : s.value}</p>
+                    <p className="admin-stat-sub">{loading ? "" : s.sub}</p>
                     <div className="admin-stat-accent" />
                   </div>
                 ))}
               </div>
 
-              {/* Charts Row */}
               <div className="admin-charts-row">
                 <div className="admin-chart-card">
                   <h3 className="admin-chart-title">Monthly Document Activity</h3>
@@ -252,24 +257,27 @@ export default function AdminDashboard({
 
                 <div className="admin-chart-card">
                   <h3 className="admin-chart-title">Credential Distribution</h3>
-                  <div className="admin-donut-wrapper">
-                    <DonutChart data={credentialDist} total={totalCreds} />
-                  </div>
-                  <div className="admin-donut-legend">
-                    {credentialDist.map((item, i) => (
-                      <div key={i} className="admin-donut-legend-row">
-                        <span className="admin-donut-legend-label">
-                          <span className="admin-donut-legend-dot" style={{ backgroundColor: item.color }} />
-                          {item.label}
-                        </span>
-                        <span className="admin-donut-legend-value">{item.value}</span>
+                  {totalCreds === 0 ? (
+                    <p style={{ opacity: 0.5, fontSize: "0.875rem", padding: "1.5rem 0" }}>{loading ? "Loading…" : "No documents uploaded yet."}</p>
+                  ) : (
+                    <>
+                      <div className="admin-donut-wrapper"><DonutChart data={credentialDist} total={totalCreds} /></div>
+                      <div className="admin-donut-legend">
+                        {credentialDist.map((item, i) => (
+                          <div key={i} className="admin-donut-legend-row">
+                            <span className="admin-donut-legend-label">
+                              <span className="admin-donut-legend-dot" style={{ backgroundColor: item.color }} />
+                              {item.label}
+                            </span>
+                            <span className="admin-donut-legend-value">{item.value}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </>
+                  )}
                 </div>
               </div>
 
-              {/* Recent Activities Table */}
               <div className="admin-activity-card">
                 <h3 className="admin-activity-title">Recent Activities</h3>
                 <div className="admin-activity-table-wrapper">
@@ -282,33 +290,35 @@ export default function AdminDashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {activities.map((a, i) => (
-                        <tr key={i} className="admin-activity-tr">
-                          <td className="admin-activity-td">
-                            <div className="admin-activity-staff-cell">
-                              <div className="admin-activity-staff-avatar">
-                                {a.staff.split(" ").map(n => n[0]).join("").slice(0, 2)}
+                      {loading ? (
+                        <tr><td colSpan={3} className="admin-activity-td">Loading…</td></tr>
+                      ) : activities.length === 0 ? (
+                        <tr><td colSpan={3} className="admin-activity-td">No recent activity yet.</td></tr>
+                      ) : (
+                        activities.map((a, i) => (
+                          <tr key={i} className="admin-activity-tr">
+                            <td className="admin-activity-td">
+                              <div className="admin-activity-staff-cell">
+                                <div className="admin-activity-staff-avatar">{a.staff.split(" ").map(n => n[0]).join("").slice(0, 2)}</div>
+                                <span className="admin-activity-staff-name">{a.staff}</span>
                               </div>
-                              <span className="admin-activity-staff-name">{a.staff}</span>
-                            </div>
-                          </td>
-                          <td className="admin-activity-td">
-                            <div className="admin-activity-action-cell">
-                              <div className="admin-activity-dot-sm">
-                                <div className="admin-activity-dot-inner" />
+                            </td>
+                            <td className="admin-activity-td">
+                              <div className="admin-activity-action-cell">
+                                <div className="admin-activity-dot-sm"><div className="admin-activity-dot-inner" /></div>
+                                <div>
+                                  <p className="admin-activity-action">{a.action}</p>
+                                  <p className="admin-activity-student">{a.student}</p>
+                                </div>
                               </div>
-                              <div>
-                                <p className="admin-activity-action">{a.action}</p>
-                                <p className="admin-activity-student">{a.student}</p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="admin-activity-td admin-activity-td-right">
-                            <p className="admin-activity-date">{a.date}</p>
-                            <p className="admin-activity-time">{a.time}</p>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="admin-activity-td admin-activity-td-right">
+                              <p className="admin-activity-date">{a.date}</p>
+                              <p className="admin-activity-time">{a.time}</p>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -317,16 +327,14 @@ export default function AdminDashboard({
           )}
 
           {activePage !== "Dashboard" && (
-  children ? (
-    children
-  ) : (
-    <div className="flex flex-col items-center justify-center h-full text-center">
-      <h2 className="admin-empty-title">{activePage}</h2>
-      <p className="admin-empty-sub">This page is under construction.</p>
-      <div className="admin-empty-accent" />
-    </div>
-  )
-)}
+            children ? children : (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <h2 className="admin-empty-title">{activePage}</h2>
+                <p className="admin-empty-sub">This page is under construction.</p>
+                <div className="admin-empty-accent" />
+              </div>
+            )
+          )}
         </main>
       </div>
     </div>
