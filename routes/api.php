@@ -3,6 +3,9 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\OcrController;
+use App\Http\Controllers\Api\StaffController;
+use App\Http\Controllers\Api\ReportsController;
+
 
 Route::post('/ocr/extract', [OcrController::class, 'extract']);
 /*
@@ -38,3 +41,12 @@ Route::get('/student/{id}', function ($id) {
 
     return response()->json($student);
 });
+ 
+Route::get('reports', [ReportsController::class, 'index']);
+
+Route::apiResource('staff', StaffController::class)->only([
+    'index', 'store', 'update', 'destroy',
+]);
+ 
+Route::post('staff/{staff}/login',  [StaffController::class, 'setActive']);
+Route::post('staff/{staff}/logout', [StaffController::class, 'setInactive']);

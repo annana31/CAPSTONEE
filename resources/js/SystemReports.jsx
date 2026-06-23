@@ -1,210 +1,123 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./styles/SystemReports.css";
 
-const stats = [
-  { label: "Total Student Profiles", value: "11,953", sub: "+87 this month" },
-  { label: "Credentials Archived", value: "42,717", sub: "Last: 24 min ago" },
-  { label: "Completed Requests", value: "1,284", sub: "96.2% resolution rate" },
-  { label: "Active Registrar Staff", value: "4", sub: "+1 this month" },
-];
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const trendData = [
-  { uploads: 28, requests: 18 },
-  { uploads: 38, requests: 24 },
-  { uploads: 42, requests: 30 },
-  { uploads: 55, requests: 38 },
-  { uploads: 60, requests: 42 },
-  { uploads: 72, requests: 50 },
-  { uploads: 65, requests: 45 },
-  { uploads: 90, requests: 62 },
-  { uploads: 80, requests: 55 },
-  { uploads: 88, requests: 60 },
-  { uploads: 75, requests: 52 },
-  { uploads: 68, requests: 44 },
-];
-
-const credentialStored = [
-  { label: "Grades", value: 331, color: "#e6a817" },
-  { label: "Birth Certificate", value: 312, color: "#e6a817" },
-  { label: "Form 138", value: 298, color: "#3b82f6" },
-  { label: "Good Moral", value: 287, color: "#a78bfa" },
-  { label: "Form 137", value: 245, color: "#22c55e" },
-  { label: "TOR", value: 178, color: "#ec4899" },
-  { label: "LOA", value: 54, color: "#6366f1" },
-  { label: "Withdrawal", value: 32, color: "#f87171" },
-];
-
-const requestedCredentials = [
-  { label: "Transcript of Records", value: 284 },
-  { label: "Diploma Replacement", value: 241 },
-  { label: "Evaluation", value: 198 },
-  { label: "CAV Certification", value: 176 },
-  { label: "Honorable Dismissal", value: 154 },
-  { label: "Certification", value: 132 },
-  { label: "Form 137", value: 118 },
-  { label: "Permit to Study", value: 97 },
-  { label: "Correction of Name", value: 73 },
-];
-
-const maxStored = Math.max(...credentialStored.map(c => c.value));
-const maxRequested = Math.max(...requestedCredentials.map(c => c.value));
-
-// ── TREND BAR CHART ──
-function TrendChart({ data, months, dateFrom, dateTo }) {
-  const svgWidth = 680;
-  const svgHeight = 200;
-  const paddingLeft = 44;
-  const paddingRight = 16;
-  const paddingTop = 12;
-  const paddingBottom = 36;
-  const chartWidth = svgWidth - paddingLeft - paddingRight;
-  const chartHeight = svgHeight - paddingTop - paddingBottom;
-  const maxVal = Math.max(...data.map(d => Math.max(d.uploads, d.requests))) * 1.2;
+// ── TREND BAR CHART ──────────────────────────────────────────────────
+function TrendChart({ data }) {
+  const svgWidth = 680, svgHeight = 200;
+  const paddingLeft = 44, paddingRight = 16, paddingTop = 12, paddingBottom = 36;
+  const chartWidth  = svgWidth  - paddingLeft - paddingRight;
+  const chartHeight = svgHeight - paddingTop  - paddingBottom;
+  const maxVal = Math.max(...data.map(d => Math.max(d.uploads, d.requests)), 1) * 1.2;
   const barGroupWidth = chartWidth / data.length;
   const barWidth = barGroupWidth * 0.28;
   const yTicks = [0, 30, 60, 90, 120];
 
   return (
-    <svg
-      viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-      className="sr-bar-chart-svg"
-      preserveAspectRatio="xMidYMid meet"
-    >
+    <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="sr-bar-chart-svg" preserveAspectRatio="xMidYMid meet">
       {yTicks.map(tick => {
         const y = paddingTop + chartHeight - (tick / maxVal) * chartHeight;
         return (
           <g key={tick}>
-            <line
-              x1={paddingLeft} y1={y}
-              x2={svgWidth - paddingRight} y2={y}
-              stroke="rgba(255,255,255,0.04)"
-              strokeWidth="1"
-            />
-            <text x={paddingLeft - 8} y={y + 4} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.22)">
-              {tick}
-            </text>
+            <line x1={paddingLeft} y1={y} x2={svgWidth - paddingRight} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
+            <text x={paddingLeft - 8} y={y + 4} textAnchor="end" fontSize="10" fill="rgba(255,255,255,0.22)">{tick}</text>
           </g>
         );
       })}
-
       {data.map((d, i) => {
-        const groupX = paddingLeft + i * barGroupWidth;
-        const centerX = groupX + barGroupWidth / 2;
-        const uploadH = (d.uploads / maxVal) * chartHeight;
+        const centerX  = paddingLeft + i * barGroupWidth + barGroupWidth / 2;
+        const uploadH  = (d.uploads  / maxVal) * chartHeight;
         const requestH = (d.requests / maxVal) * chartHeight;
-
         return (
           <g key={i}>
-            <rect
-              x={centerX - barWidth - 2}
-              y={paddingTop + chartHeight - uploadH}
-              width={barWidth} height={uploadH}
-              fill="#e6a817" opacity="0.88" rx="2"
-            />
-            <rect
-              x={centerX + 2}
-              y={paddingTop + chartHeight - requestH}
-              width={barWidth} height={requestH}
-              fill="#3b82f6" opacity="0.7" rx="2"
-            />
-            <text
-              x={centerX} y={svgHeight - 8}
-              textAnchor="middle" fontSize="10"
-              fill="rgba(255,255,255,0.28)"
-            >
-              {months[i]}
-            </text>
+            <rect x={centerX - barWidth - 2} y={paddingTop + chartHeight - uploadH}  width={barWidth} height={uploadH}  fill="#e6a817" opacity="0.88" rx="2" />
+            <rect x={centerX + 2}            y={paddingTop + chartHeight - requestH} width={barWidth} height={requestH} fill="#3b82f6" opacity="0.7"  rx="2" />
+            <text x={centerX} y={svgHeight - 8} textAnchor="middle" fontSize="10" fill="rgba(255,255,255,0.28)">{months[i]}</text>
           </g>
         );
       })}
-
-      <line
-        x1={paddingLeft} y1={paddingTop + chartHeight}
-        x2={svgWidth - paddingRight} y2={paddingTop + chartHeight}
-        stroke="rgba(255,255,255,0.07)" strokeWidth="1"
-      />
+      <line x1={paddingLeft} y1={paddingTop + chartHeight} x2={svgWidth - paddingRight} y2={paddingTop + chartHeight} stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
     </svg>
   );
 }
 
-// ── MOST REQUESTED CREDENTIALS CHART ──
+// ── MOST REQUESTED CREDENTIALS CHART ─────────────────────────────────
 function RequestedChart({ data, maxVal }) {
-  const svgWidth = 420;
-  const svgHeight = 240;
-  const paddingLeft = 12;
-  const paddingRight = 44;
-  const paddingTop = 12;
-  const paddingBottom = 36;
-  const chartWidth = svgWidth - paddingLeft - paddingRight;
-  const chartHeight = svgHeight - paddingTop - paddingBottom;
-  const barGroupHeight = chartHeight / data.length;
+  const svgWidth = 420, svgHeight = 240;
+  const paddingLeft = 12, paddingRight = 44, paddingTop = 12, paddingBottom = 36;
+  const chartWidth  = svgWidth  - paddingLeft - paddingRight;
+  const chartHeight = svgHeight - paddingTop  - paddingBottom;
+  const barGroupHeight = chartHeight / Math.max(data.length, 1);
   const barH = barGroupHeight * 0.48;
   const xTicks = [0, 75, 150, 225, 300];
 
   return (
-    <svg
-      viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-      className="sr-req-chart-svg"
-      preserveAspectRatio="xMidYMid meet"
-    >
+    <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="sr-req-chart-svg" preserveAspectRatio="xMidYMid meet">
       {xTicks.map(tick => {
         const x = paddingLeft + (tick / maxVal) * chartWidth;
         return (
           <g key={tick}>
-            <line
-              x1={x} y1={paddingTop}
-              x2={x} y2={paddingTop + chartHeight}
-              stroke="rgba(255,255,255,0.04)" strokeWidth="1"
-            />
-            <text
-              x={x} y={svgHeight - 6}
-              textAnchor="middle" fontSize="9"
-              fill="rgba(255,255,255,0.22)"
-            >
-              {tick}
-            </text>
+            <line x1={x} y1={paddingTop} x2={x} y2={paddingTop + chartHeight} stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
+            <text x={x} y={svgHeight - 6} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.22)">{tick}</text>
           </g>
         );
       })}
-
       {data.map((d, i) => {
-        const centerY = paddingTop + i * barGroupHeight + barGroupHeight / 2;
+        const centerY  = paddingTop + i * barGroupHeight + barGroupHeight / 2;
         const barWidth = (d.value / maxVal) * chartWidth;
-
         return (
           <g key={i}>
-            <rect
-              x={paddingLeft}
-              y={centerY - barH / 2}
-              width={barWidth} height={barH}
-              fill="#22c55e" opacity="0.8" rx="3"
-            />
-            <text
-              x={paddingLeft + barWidth + 6}
-              y={centerY + 4}
-              fontSize="10" fill="rgba(255,255,255,0.7)"
-              fontWeight="bold"
-            >
-              {d.value}
-            </text>
+            <rect x={paddingLeft} y={centerY - barH / 2} width={barWidth} height={barH} fill="#22c55e" opacity="0.8" rx="3" />
+            <text x={paddingLeft + barWidth + 6} y={centerY + 4} fontSize="10" fill="rgba(255,255,255,0.7)" fontWeight="bold">{d.value}</text>
           </g>
         );
       })}
-
-      <line
-        x1={paddingLeft} y1={paddingTop}
-        x2={paddingLeft} y2={paddingTop + chartHeight}
-        stroke="rgba(255,255,255,0.07)" strokeWidth="1"
-      />
+      <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={paddingTop + chartHeight} stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
     </svg>
   );
 }
 
+// ── COLORS FOR STORED CREDENTIALS BARS ───────────────────────────────
+const BAR_COLORS = ["#e6a817","#e6a817","#3b82f6","#a78bfa","#22c55e","#ec4899","#6366f1","#f87171"];
+
+// ── MAIN COMPONENT ────────────────────────────────────────────────────
 export default function SystemReports() {
-  const [dateFrom, setDateFrom] = useState("2026-01-01");
-  const [dateTo, setDateTo] = useState("2026-05-25");
+  const [year, setYear]                       = useState(new Date().getFullYear());
+  const [stats, setStats]                     = useState([]);
+  const [monthlyTrends, setMonthlyTrends]     = useState(Array(12).fill({ uploads: 0, requests: 0 }));
+  const [storedCreds, setStoredCreds]         = useState([]);
+  const [requestedCreds, setRequestedCreds]   = useState([]);
+  const [loading, setLoading]                 = useState(true);
+  const [error, setError]                     = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${API_BASE}/reports?year=${year}`)
+      .then(res => {
+        if (!res.ok) throw new Error("Couldn't load report data.");
+        return res.json();
+      })
+      .then(json => {
+        setStats(json.stats);
+        setMonthlyTrends(json.monthlyTrends);
+        setStoredCreds(json.mostStoredCredentials);
+        setRequestedCreds(json.mostRequestedCredentials);
+      })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [year]);
+
+  const maxStored    = Math.max(...storedCreds.map(c => c.value), 1);
+  const maxRequested = Math.max(...requestedCreds.map(c => c.value), 1) * 1.15;
+
+  // Year selector — current year and 4 years back
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i);
 
   return (
     <>
@@ -214,16 +127,32 @@ export default function SystemReports() {
         <p className="sr-page-sub">Analytics and document activity overview</p>
       </div>
 
+      {error && (
+        <div style={{ background: "#fee2e2", color: "#b91c1c", padding: "10px 14px", borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          {error}
+        </div>
+      )}
+
       {/* Stat Cards */}
       <div className="sr-stats-grid">
-        {stats.map((s, i) => (
-          <div key={i} className="sr-stat-card">
-            <p className="sr-stat-label">{s.label}</p>
-            <p className="sr-stat-value">{s.value}</p>
-            <p className="sr-stat-sub">{s.sub}</p>
-            <div className="sr-stat-accent" />
-          </div>
-        ))}
+        {loading
+          ? Array(4).fill(null).map((_, i) => (
+              <div key={i} className="sr-stat-card" style={{ opacity: 0.4 }}>
+                <p className="sr-stat-label">Loading…</p>
+                <p className="sr-stat-value">—</p>
+                <p className="sr-stat-sub">—</p>
+                <div className="sr-stat-accent" />
+              </div>
+            ))
+          : stats.map((s, i) => (
+              <div key={i} className="sr-stat-card">
+                <p className="sr-stat-label">{s.label}</p>
+                <p className="sr-stat-value">{s.value}</p>
+                <p className="sr-stat-sub">{s.sub}</p>
+                <div className="sr-stat-accent" />
+              </div>
+            ))
+        }
       </div>
 
       {/* Monthly Upload Trends */}
@@ -231,29 +160,20 @@ export default function SystemReports() {
         <div className="sr-card-header">
           <h3 className="sr-card-title">Monthly Upload Trends</h3>
           <div className="sr-date-row">
-            <input
-              type="date"
+            <label className="sr-date-label">Year:</label>
+            <select
               className="sr-date-input"
-              value={dateFrom}
-              onChange={e => setDateFrom(e.target.value)}
-            />
-            <span className="sr-date-label">to</span>
-            <input
-              type="date"
-              className="sr-date-input"
-              value={dateTo}
-              onChange={e => setDateTo(e.target.value)}
-            />
+              value={year}
+              onChange={e => setYear(Number(e.target.value))}
+            >
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
           </div>
         </div>
-        <TrendChart data={trendData} months={months} dateFrom={dateFrom} dateTo={dateTo} />
+        <TrendChart data={monthlyTrends} />
         <div className="sr-bar-legend">
-          <span className="sr-bar-legend-item">
-            <span className="sr-legend-dot-gold" /> Uploads
-          </span>
-          <span className="sr-bar-legend-item">
-            <span className="sr-legend-dot-blue" /> Document Requests
-          </span>
+          <span className="sr-bar-legend-item"><span className="sr-legend-dot-gold" /> Uploads</span>
+          <span className="sr-bar-legend-item"><span className="sr-legend-dot-blue" /> Document Requests</span>
         </div>
       </div>
 
@@ -265,22 +185,23 @@ export default function SystemReports() {
           <div className="sr-card-header">
             <h3 className="sr-card-title">Most Stored Credentials</h3>
           </div>
-          {credentialStored.map((c, i) => (
-            <div key={i} className="sr-hbar-row">
-              <span className="sr-hbar-label">{c.label}</span>
-              <div className="sr-hbar-track">
-                <div
-                  className="sr-hbar-fill"
-                  style={{
-                    width: `${(c.value / maxStored) * 100}%`,
-                    backgroundColor: c.color,
-                    opacity: 0.85,
-                  }}
-                />
-              </div>
-              <span className="sr-hbar-value">{c.value}</span>
-            </div>
-          ))}
+          {loading
+            ? <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>Loading…</p>
+            : storedCreds.length === 0
+              ? <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>No data yet.</p>
+              : storedCreds.map((c, i) => (
+                  <div key={i} className="sr-hbar-row">
+                    <span className="sr-hbar-label">{c.label}</span>
+                    <div className="sr-hbar-track">
+                      <div
+                        className="sr-hbar-fill"
+                        style={{ width: `${(c.value / maxStored) * 100}%`, backgroundColor: BAR_COLORS[i % BAR_COLORS.length], opacity: 0.85 }}
+                      />
+                    </div>
+                    <span className="sr-hbar-value">{c.value}</span>
+                  </div>
+                ))
+          }
         </div>
 
         {/* Most Requested Credentials */}
@@ -288,18 +209,23 @@ export default function SystemReports() {
           <div className="sr-card-header">
             <h3 className="sr-card-title">Most Requested Credentials</h3>
           </div>
-          <div className="flex gap-6">
-            <div className="flex flex-col justify-around py-1" style={{ minWidth: "148px" }}>
-              {requestedCredentials.map((c, i) => (
-                <span key={i} className="sr-hbar-label" style={{ paddingBottom: "6px" }}>
-                  {c.label}
-                </span>
-              ))}
-            </div>
-            <div className="flex-1">
-              <RequestedChart data={requestedCredentials} maxVal={maxRequested * 1.15} />
-            </div>
-          </div>
+          {loading
+            ? <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>Loading…</p>
+            : requestedCreds.length === 0
+              ? <p style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>No data yet.</p>
+              : (
+                  <div className="flex gap-6">
+                    <div className="flex flex-col justify-around py-1" style={{ minWidth: "148px" }}>
+                      {requestedCreds.map((c, i) => (
+                        <span key={i} className="sr-hbar-label" style={{ paddingBottom: "6px" }}>{c.label}</span>
+                      ))}
+                    </div>
+                    <div className="flex-1">
+                      <RequestedChart data={requestedCreds} maxVal={maxRequested} />
+                    </div>
+                  </div>
+                )
+          }
         </div>
 
       </div>

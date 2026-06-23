@@ -10,26 +10,36 @@ import AdminDashboard from "./AdminDashboard";
 import StaffAccounts from "./StaffAccounts";
 import SystemReports from "./SystemReports";
 import AuditLogs from "./AuditLogs";
+import { supabase } from "./supabaseClient";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [studentMode, setStudentMode] = useState(false);
   const [staffName, setStaffName] = useState("");
+  const [staffId, setStaffId] = useState(null);
   const [activePage, setActivePage] = useState("Dashboard");
 
-  // ── now receives both username and user_role from Login.jsx ──
-  const handleLogin = (name, role) => {
+  const handleLogin = (name, role, id) => {
     setIsAdmin(role?.toLowerCase() === "admin");
     setStaffName(name);
+    setStaffId(Number(id)); // ensure it's always a number
     setLoggedIn(true);
     setActivePage("Dashboard");
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (staffId) {
+      const { data, error } = await supabase
+        .from("tbl_staff")
+        .update({ status: "Inactive" })
+        .eq("staff_id", Number(staffId))
+        .select();
+    }
     setLoggedIn(false);
     setIsAdmin(false);
     setStaffName("");
+    setStaffId(null);
     setActivePage("Dashboard");
   };
 
@@ -49,14 +59,10 @@ export default function App() {
   if (isAdmin) {
     const renderAdminPage = () => {
       switch (activePage) {
-        case "Staff Accounts":
-          return <StaffAccounts />;
-        case "System Reports":
-          return <SystemReports />;
-        case "Audit Logs":
-          return <AuditLogs />;
-        default:
-          return null;
+        case "Staff Accounts": return <StaffAccounts />;
+        case "System Reports": return <SystemReports />;
+        case "Audit Logs": return <AuditLogs />;
+        default: return null;
       }
     };
 
@@ -74,16 +80,11 @@ export default function App() {
 
   const renderPage = () => {
     switch (activePage) {
-      case "Students":
-        return <Students onViewStudent={() => setActivePage("StudentProfile")} />;
-      case "Departments":
-        return <Departments onViewStudent={() => setActivePage("StudentProfile")} />;
-      case "Requests":
-        return <Requests />;
-      case "StudentProfile":
-        return <StudentProfile staffName={staffName} onLogout={handleLogout} />;
-      default:
-        return null;
+      case "Students": return <Students onViewStudent={() => setActivePage("StudentProfile")} />;
+      case "Departments": return <Departments onViewStudent={() => setActivePage("StudentProfile")} />;
+      case "Requests": return <Requests />;
+      case "StudentProfile": return <StudentProfile staffName={staffName} onLogout={handleLogout} />;
+      default: return null;
     }
   };
 

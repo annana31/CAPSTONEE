@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./styles/AdminDashboard.css";
 
+
 const navItems = ["Dashboard", "Staff Accounts", "System Reports", "Audit Logs"];
 
 const stats = [
@@ -202,9 +203,15 @@ export default function AdminDashboard({
               </button>
               {dropdownOpen && (
                 <div className="admin-topbar-dropdown" style={{ top: "48px" }}>
-                  <button className="admin-topbar-dropdown-logout" onClick={() => { setDropdownOpen(false); onLogout && onLogout(); }}>
-                    Logout
-                  </button>
+              <button 
+                className="admin-topbar-dropdown-logout" 
+                onMouseDown={async (e) => { 
+                  e.preventDefault();
+                  await onLogout();      
+                }}
+              >
+                Logout
+              </button>
                 </div>
               )}
             </div>
