@@ -200,70 +200,139 @@ export default function StudentPreview({ onBack }) {
               )}
 
               {/* Certification sub-choice */}
-              {requestType === "Certification" && (
-                <div className="md:col-span-2">
-                  <label className={labelClass}>Certification Type</label>
-                  <div className="relative">
-                    <select
-                      className={selectClass}
-                      value={certChoice}
-                      onChange={e => { setCertChoice(e.target.value); setCertOther(""); setSubjectSem(""); setSubjectSY1(""); setSubjectSY2(""); }}
-                    >
-                      <option value="">Select Type</option>
-                      {certificationChoices.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
-                  </div>
+{requestType === "Certification" && (
+  <div className="md:col-span-2">
+    <label className={labelClass}>Certification Type</label>
+    <div className="relative">
+      <select
+        className={selectClass}
+        value={certChoice}
+        onChange={e => { setCertChoice(e.target.value); setCertOther(""); setSubjectSem(""); setSubjectSY1(""); setSubjectSY2(""); }}
+      >
+        <option value="">Select Type</option>
+        {certificationChoices.map(c => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
+    </div>
 
-                  {/* Subjects with Grade fields */}
-                  {certChoice === "Subjects with Grade" && (
-                    <div className="mt-3 grid grid-cols-3 gap-3">
-                      <div>
-                        <label className={labelClass}>Semester</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 1st"
-                          value={subjectSem}
-                          onChange={e => setSubjectSem(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass}>S.Y. Start</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 2023"
-                          value={subjectSY1}
-                          onChange={e => setSubjectSY1(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass}>S.Y. End</label>
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. 2024"
-                          value={subjectSY2}
-                          onChange={e => setSubjectSY2(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
+    {/* Subjects with Grade fields */}
+    {certChoice === "Subjects with Grade" && (
+      <div className="mt-3 grid grid-cols-3 gap-3">
+        <div>
+          <label className={labelClass}>Semester</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 1st"
+            value={subjectSem}
+            onChange={e => setSubjectSem(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>S.Y. Start</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 2023"
+            value={subjectSY1}
+            onChange={e => setSubjectSY1(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>S.Y. End</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 2024"
+            value={subjectSY2}
+            onChange={e => setSubjectSY2(e.target.value)}
+          />
+        </div>
+      </div>
+    )}
 
-                  {/* Others specify */}
-                  {certChoice === "Others" && (
-                    <div className="mt-3">
-                      <label className={labelClass}>Please Specify</label>
-                      <input
-                        className={inputClass}
-                        placeholder="Specify certification type"
-                        value={certOther}
-                        onChange={e => setCertOther(e.target.value)}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
+    {/* Subjects Enrolled fields */}
+    {certChoice === "Subjects Enrolled" && (
+      <div className="mt-3 grid grid-cols-3 gap-3">
+        <div>
+          <label className={labelClass}>Semester</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 1st"
+            value={subjectSem}
+            onChange={e => setSubjectSem(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>S.Y. Start</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 2023"
+            value={subjectSY1}
+            onChange={e => setSubjectSY1(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>S.Y. End</label>
+          <input
+            className={inputClass}
+            placeholder="e.g. 2024"
+            value={subjectSY2}
+            onChange={e => setSubjectSY2(e.target.value)}
+          />
+        </div>
+      </div>
+    )}
+
+    {/* Others specify */}
+    {certChoice === "Others" && (
+      <div className="mt-3">
+        <label className={labelClass}>Please Specify</label>
+        <input
+          className={inputClass}
+          placeholder="Specify certification type"
+          value={certOther}
+          onChange={e => setCertOther(e.target.value)}
+        />
+      </div>
+    )}
+  </div>
+)}
+
+{/* Transcript of Records sub-fields */}
+{requestType === "Transcript of Records" && (
+  <div className="md:col-span-2">
+    <label className={labelClass}></label>
+    <div className="grid grid-cols-3 gap-3">
+      <div>
+        <label className={labelClass}>Semester</label>
+        <input
+          className={inputClass}
+          placeholder="e.g. 1st"
+          value={subjectSem}
+          onChange={e => setSubjectSem(e.target.value)}
+        />
+      </div>
+      <div>
+        <label className={labelClass}>S.Y. Start</label>
+        <input
+          className={inputClass}
+          placeholder="e.g. 2023"
+          value={subjectSY1}
+          onChange={e => setSubjectSY1(e.target.value)}
+        />
+      </div>
+      <div>
+        <label className={labelClass}>S.Y. End</label>
+        <input
+          className={inputClass}
+          placeholder="e.g. 2024"
+          value={subjectSY2}
+          onChange={e => setSubjectSY2(e.target.value)}
+        />
+      </div>
+    </div>
+  </div>
+)}
 
               {/* Purpose */}
               <div className="md:col-span-2">

@@ -36,13 +36,13 @@ export default function App() {
   }
 
   if (!loggedIn) {
-  return (
-    <StudentProfile
-      staffName="Test User"
-      onLogout={() => {}}
-    />
-  );
-}
+    return (
+      <Login
+        onLogin={handleLogin}
+        onStudentAccess={() => setStudentMode(true)}
+      />
+    );
+  }
 
   if (isAdmin) {
     const renderAdminPage = () => {
