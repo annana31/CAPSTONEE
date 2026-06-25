@@ -5,8 +5,9 @@ import "./styles/AuditLogs.css";
 const activityTypes = ["Upload", "View", "Update", "Login", "Archive", "Request", "Delete", "Export"];
 
 const badgeClass = (status) => {
-  if (status === "Success") return "al-badge-success";
-  if (status === "Failed")  return "al-badge-failed";
+  const s = (status || "").toLowerCase();
+  if (s === "success") return "al-badge-success";
+  if (s === "failed")  return "al-badge-failed";
   return "al-badge-warning";
 };
 
@@ -62,12 +63,12 @@ export default function AuditLogs() {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const todayCount  = logs.filter(l => (l.timestamp || "").startsWith(todayStr)).length;
-  const failedCount = logs.filter(l => l.status === "Failed").length;
+  const failedCount = logs.filter(l => (l.status || "").toLowerCase() === "failed").length;
 
   const filtered = useMemo(() => {
     return logs.filter(l => {
-      const matchType   = filterType   ? l.type   === filterType   : true;
-      const matchStatus = filterStatus ? l.status === filterStatus : true;
+      const matchType   = filterType   ? (l.type   || "").toLowerCase() === filterType.toLowerCase()   : true;
+      const matchStatus = filterStatus ? (l.status || "").toLowerCase() === filterStatus.toLowerCase() : true;
       return matchType && matchStatus;
     });
   }, [logs, filterType, filterStatus]);
@@ -109,13 +110,21 @@ export default function AuditLogs() {
 
       <div className="al-filter-bar">
         <div className="al-search">&#9906;</div>
-        <select className="al-select" value={filterType} onChange={e => setFilterType(e.target.value)}>
+        <select
+          className="al-select"
+          value={filterType}
+          onChange={e => setFilterType(e.target.value)}
+        >
           <option value="">All Types</option>
           {activityTypes.map(t => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
-        <select className="al-select" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+        <select
+          className="al-select"
+          value={filterStatus}
+          onChange={e => setFilterStatus(e.target.value)}
+        >
           <option value="">All Status</option>
           <option value="Success">Success</option>
           <option value="Failed">Failed</option>
@@ -137,11 +146,17 @@ export default function AuditLogs() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} className="al-empty">Loading audit logs…</td></tr>
+              <tr>
+                <td colSpan={6} className="al-empty">Loading audit logs…</td>
+              </tr>
             ) : errorMsg ? (
-              <tr><td colSpan={6} className="al-empty">Couldn't load logs: {errorMsg}</td></tr>
+              <tr>
+                <td colSpan={6} className="al-empty">Couldn't load logs: {errorMsg}</td>
+              </tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={6} className="al-empty">No logs found.</td></tr>
+              <tr>
+                <td colSpan={6} className="al-empty">No logs found.</td>
+              </tr>
             ) : (
               filtered.map((log, i) => (
                 <tr key={log.id ?? i} className={i % 2 === 0 ? "al-row-even" : "al-row-odd"}>
