@@ -28,9 +28,14 @@ const departmentData = {
     completion: 69,
   },
   COM: {
-    full: "College of Management",
-    courses: ["BS Nursing"],
+    full: "College of Medicine",
+    courses: ["Doctor of Medicine"],
     completion: 77,
+  },
+  CON: {
+    full: "College of Nursing",
+    courses: ["BS Nursing"],
+    completion: 75,
   },
   SHS: {
     full: "Senior High School",

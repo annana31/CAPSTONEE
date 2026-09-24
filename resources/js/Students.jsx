@@ -3,7 +3,12 @@ import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 
 const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
+const statuses = ["Active", "LOA", "Inactive", "Graduated"];
 const intToYearLevel = { 1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year" };
+const yearLevelToInt = { "1st Year": 1, "2nd Year": 2, "3rd Year": 3, "4th Year": 4, "5th Year": 5 };
+
+const currentYear = new Date().getFullYear();
+const yearOptions = Array.from({ length: 10 }, (_, i) => currentYear - i);
 
 const statusClass = (status) => {
   if (status === "Active") return "status-badge status-active";
@@ -36,7 +41,7 @@ const extractNameFromFile = async (file) => {
   };
 };
 
-export default function Students() {
+export default function Students({ onViewStudent }) {
   const [students, setStudents] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [coursesByDept, setCoursesByDept] = useState({});
@@ -49,12 +54,28 @@ export default function Students() {
   const [submitting, setSubmitting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState("");
+  const [fileName, setFileName] = useState("");
 
   const [form, setForm] = useState({
-    id: "", department: "", course: "", email: "",
-    first_name: "", last_name: "", middle_name: "",
+    enrollYear: String(currentYear),
+    idSuffix: "",
+    first_name: "",
+    last_name: "",
+    middle_name: "",
+    birthdate: "",
+    gender: "Female",
+    email: "",
+    contact: "",
+    department: "",
+    course: "",
+    yearLevel: "1st Year",
+    status: "Active",
+    address: "",
   });
-  const [fileName, setFileName] = useState("");
+
+  const generatedId = form.enrollYear && form.idSuffix
+    ? `${form.enrollYear}${form.idSuffix.padStart(6, "0")}`
+    : `${form.enrollYear}000000`;
 
   // ── BACKEND: Fetch colleges ──
   useEffect(() => {
@@ -94,7 +115,8 @@ export default function Students() {
       .from("tbl_student")
       .select(`
         student_id, first_name, last_name, middle_name,
-        email, year_level, status,
+        birthdate, gender, email, contact_number, address,
+        year_level, status,
         tbl_college (college_id, college_name),
         tbl_program (program_id, program_name)
       `)
@@ -107,7 +129,11 @@ export default function Students() {
         first_name: s.first_name ?? "",
         last_name: s.last_name ?? "",
         middle_name: s.middle_name ?? "",
+        birthdate: s.birthdate ?? "",
+        gender: s.gender ?? "",
         email: s.email ?? "",
+        contact: s.contact_number ?? "",
+        address: s.address ?? "",
         department: s.tbl_college?.college_name ?? "—",
         college_id: s.tbl_college?.college_id ?? null,
         course: s.tbl_program?.program_name ?? "—",
@@ -121,6 +147,7 @@ export default function Students() {
 
   useEffect(() => { fetchStudents(); }, []);
 
+  // ── FILTER ──
   const filtered = students.filter(s => {
     const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
       String(s.id).includes(search);
@@ -138,7 +165,7 @@ export default function Students() {
     }));
   };
 
-  // ── OCR: Handle file attach and auto-extract name via Laravel + Surya ──
+  // ── OCR: Handle file attach and auto-extract name ──
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -146,8 +173,6 @@ export default function Students() {
     setFileName(file.name);
     setExtractError("");
     setExtracting(true);
-
-    // Reset name fields while extracting
     setForm(prev => ({ ...prev, first_name: "", last_name: "", middle_name: "" }));
 
     try {
@@ -160,7 +185,7 @@ export default function Students() {
       }));
     } catch (err) {
       console.error("OCR extraction failed:", err);
-      setExtractError("Could not extract name from document. Please fill in manually.");
+      setExtractError("Could not extract name. Please fill in manually.");
     } finally {
       setExtracting(false);
     }
@@ -168,31 +193,50 @@ export default function Students() {
 
   // ── BACKEND: Insert new student ──
   const handleSubmit = async () => {
-    if (!form.id || !form.department || !form.course || !form.first_name || !form.last_name) return;
+    if (!form.first_name || !form.last_name || !form.department || !form.course) return;
     setSubmitting(true);
     try {
       const { error } = await supabase
         .from("tbl_student")
         .insert({
-          student_id: Number(form.id),
+          student_id: Number(generatedId),
           first_name: form.first_name,
           last_name: form.last_name,
           middle_name: form.middle_name || null,
+          birthdate: form.birthdate || null,
+          gender: form.gender || null,
           email: form.email || null,
+          contact_number: form.contact || null,
+          address: form.address || null,
           college_id: Number(form.department),
           program_id: Number(form.course),
-          year_level: 1,
-          status: "Active",
+          year_level: yearLevelToInt[form.yearLevel] || 1,
+          status: form.status,
         });
 
       if (error) {
         console.error("Insert error:", error);
-        alert("Failed to save student. Please check the details and try again.");
+        alert("Failed to save student: " + error.message);
         return;
       }
 
       await fetchStudents();
-      setForm({ id: "", department: "", course: "", email: "", first_name: "", last_name: "", middle_name: "" });
+      setForm({
+        enrollYear: String(currentYear),
+        idSuffix: "",
+        first_name: "",
+        last_name: "",
+        middle_name: "",
+        birthdate: "",
+        gender: "Female",
+        email: "",
+        contact: "",
+        department: "",
+        course: "",
+        yearLevel: "1st Year",
+        status: "Active",
+        address: "",
+      });
       setFileName("");
       setExtractError("");
       setShowModal(false);
@@ -220,11 +264,7 @@ export default function Students() {
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
-        <select
-          className="students-select"
-          value={filterDept}
-          onChange={e => { setFilterDept(e.target.value); setFilterCourse(""); }}
-        >
+        <select className="students-select" value={filterDept} onChange={e => { setFilterDept(e.target.value); setFilterCourse(""); }}>
           <option value="">All Departments</option>
           {departments.map(d => (
             <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
@@ -274,7 +314,9 @@ export default function Students() {
                     <span className={statusClass(s.status)}>{s.status}</span>
                   </td>
                   <td className="students-td">
-                    <button className="students-view-btn">View</button>
+                    <button className="students-view-btn" onClick={() => onViewStudent && onViewStudent(s)}>
+                      View
+                    </button>
                   </td>
                 </tr>
               ))
@@ -286,66 +328,35 @@ export default function Students() {
       {/* Add Student Modal */}
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal-card" onClick={e => e.stopPropagation()}>
-            <h3 className="modal-title">Add Student</h3>
-            <p className="modal-sub">Fill in the details or extract information from a document.</p>
+          <div
+            className="modal-card"
+            style={{ maxWidth: "600px", maxHeight: "90vh", overflowY: "auto" }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+              <h3 className="modal-title" style={{ margin: 0 }}>Add New Student</h3>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{ background: "none", border: "none", color: "#9ca3af", fontSize: "18px", cursor: "pointer", lineHeight: 1 }}
+              >
+                ✕
+              </button>
+            </div>
 
-            <label className="modal-label">Student ID</label>
-            <input
-              className="modal-input"
-              placeholder="e.g. 2021301754"
-              value={form.id}
-              onChange={e => handleFormChange("id", e.target.value)}
-            />
-
-            <label className="modal-label">Department</label>
-            <select
-              className="modal-select"
-              value={form.department}
-              onChange={e => handleFormChange("department", e.target.value)}
-            >
-              <option value="">Select Department</option>
-              {departments.map(d => (
-                <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
-              ))}
-            </select>
-
-            <label className="modal-label">Course</label>
-            <select
-              className="modal-select"
-              value={form.course}
-              onChange={e => handleFormChange("course", e.target.value)}
-              disabled={!form.department}
-            >
-              <option value="">Select Course</option>
-              {(coursesByDept[Number(form.department)] || []).map(c => (
-                <option key={c.program_id} value={c.program_id}>{c.program_name}</option>
-              ))}
-            </select>
-
-            <label className="modal-label">Email Address</label>
-            <input
-              className="modal-input"
-              placeholder="e.g. juan.delacruz@ustp.edu.ph"
-              type="email"
-              value={form.email}
-              onChange={e => handleFormChange("email", e.target.value)}
-            />
-
-            {/* ── OCR File Attachment ── */}
-            <label className="modal-label">Extract Information</label>
+            {/* Extract Information */}
             <label
               className="modal-extract-btn"
-              style={{ opacity: extracting ? 0.7 : 1, cursor: extracting ? "not-allowed" : "pointer" }}
+              style={{ display: "block", marginBottom: "8px", opacity: extracting ? 0.7 : 1, cursor: extracting ? "not-allowed" : "pointer" }}
             >
               {extracting
                 ? "⏳ Extracting name from document... (this may take a few minutes)"
                 : fileName
                   ? `📄 ${fileName}`
-                  : "Attach a document to extract student information"}
+                  : "Extract Information — Attach a document"}
               <input
                 type="file"
-                accept=".jpg,.jpeg,.png,.pdf"
+                accept=".pdf,.jpg,.jpeg,.png"
                 className="hidden"
                 disabled={extracting}
                 onChange={handleFileChange}
@@ -353,43 +364,209 @@ export default function Students() {
             </label>
 
             {extractError && (
-              <p style={{ color: "red", fontSize: "0.8rem", marginTop: "0.4rem" }}>{extractError}</p>
+              <p style={{ color: "red", fontSize: "0.8rem", marginBottom: "12px" }}>{extractError}</p>
             )}
 
-            {/* Name fields shown after file is attached — pre-filled by OCR */}
-            {fileName && (
-              <>
+            {/* Student ID Generator */}
+            <div style={{ background: "rgba(230,168,23,0.08)", border: "1px solid rgba(230,168,23,0.2)", borderRadius: "10px", padding: "14px 16px", marginBottom: "20px" }}>
+              <p className="modal-label" style={{ marginBottom: "10px", color: "#e6a817" }}>Student ID Generator</p>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <select
+                  className="modal-select"
+                  style={{ flex: 1, marginBottom: 0 }}
+                  value={form.enrollYear}
+                  onChange={e => handleFormChange("enrollYear", e.target.value)}
+                >
+                  {yearOptions.map(y => <option key={y} value={String(y)}>{y}</option>)}
+                </select>
+                <span style={{ color: "#9ca3af", fontWeight: "bold", fontSize: "16px" }}>—</span>
+                <input
+                  className="modal-input"
+                  style={{ flex: 2, marginBottom: 0 }}
+                  placeholder="123456"
+                  maxLength={6}
+                  value={form.idSuffix}
+                  onChange={e => handleFormChange("idSuffix", e.target.value.replace(/\D/g, ""))}
+                />
+                <div style={{
+                  background: "rgba(26,26,110,0.08)",
+                  border: "1px solid rgba(26,26,110,0.2)",
+                  borderRadius: "8px",
+                  padding: "10px 14px",
+                  fontSize: "13px",
+                  fontWeight: "bold",
+                  color: "#1a1a6e",
+                  whiteSpace: "nowrap",
+                }}>
+                  {generatedId}
+                </div>
+              </div>
+            </div>
+
+            {/* First Name & Last Name */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+              <div>
                 <label className="modal-label">First Name</label>
                 <input
                   className="modal-input"
+                  style={{ marginBottom: 0 }}
                   placeholder={extracting ? "Extracting..." : "First name"}
                   value={form.first_name}
                   disabled={extracting}
                   onChange={e => handleFormChange("first_name", e.target.value)}
                 />
+              </div>
+              <div>
                 <label className="modal-label">Last Name</label>
                 <input
                   className="modal-input"
+                  style={{ marginBottom: 0 }}
                   placeholder={extracting ? "Extracting..." : "Last name"}
                   value={form.last_name}
                   disabled={extracting}
                   onChange={e => handleFormChange("last_name", e.target.value)}
                 />
-                <label className="modal-label">
-                  Middle Name <span style={{ fontWeight: 400, color: "#999" }}>(optional)</span>
-                </label>
+              </div>
+            </div>
+
+            {/* Middle Name & Birthdate */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+              <div>
+                <label className="modal-label">Middle Name <span style={{ fontWeight: 400, color: "#999" }}>(optional)</span></label>
                 <input
                   className="modal-input"
+                  style={{ marginBottom: 0 }}
                   placeholder={extracting ? "Extracting..." : "Middle name"}
                   value={form.middle_name}
                   disabled={extracting}
                   onChange={e => handleFormChange("middle_name", e.target.value)}
                 />
-              </>
-            )}
+              </div>
+              <div>
+                <label className="modal-label">Birthdate</label>
+                <input
+                  type="date"
+                  className="modal-input"
+                  style={{ marginBottom: 0 }}
+                  value={form.birthdate}
+                  onChange={e => handleFormChange("birthdate", e.target.value)}
+                />
+              </div>
+            </div>
 
-            <div className="modal-footer">
-              <button className="modal-cancel-btn" onClick={() => setShowModal(false)}>Cancel</button>
+            {/* Gender & Email */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+              <div>
+                <label className="modal-label">Gender</label>
+                <select
+                  className="modal-select"
+                  style={{ marginBottom: 0 }}
+                  value={form.gender}
+                  onChange={e => handleFormChange("gender", e.target.value)}
+                >
+                  <option>Female</option>
+                  <option>Male</option>
+                  <option>Prefer not to say</option>
+                </select>
+              </div>
+              <div>
+                <label className="modal-label">Email</label>
+                <input
+                  type="email"
+                  className="modal-input"
+                  style={{ marginBottom: 0 }}
+                  placeholder="Email address"
+                  value={form.email}
+                  onChange={e => handleFormChange("email", e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Contact & Department */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+              <div>
+                <label className="modal-label">Contact Number</label>
+                <input
+                  className="modal-input"
+                  style={{ marginBottom: 0 }}
+                  placeholder="09XXXXXXXXX"
+                  value={form.contact}
+                  onChange={e => handleFormChange("contact", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="modal-label">Department</label>
+                <select
+                  className="modal-select"
+                  style={{ marginBottom: 0 }}
+                  value={form.department}
+                  onChange={e => handleFormChange("department", e.target.value)}
+                >
+                  <option value="">Select Department</option>
+                  {departments.map(d => (
+                    <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Course & Year Level */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+              <div>
+                <label className="modal-label">Course</label>
+                <select
+                  className="modal-select"
+                  style={{ marginBottom: 0 }}
+                  value={form.course}
+                  onChange={e => handleFormChange("course", e.target.value)}
+                  disabled={!form.department}
+                >
+                  <option value="">Select Course</option>
+                  {(coursesByDept[Number(form.department)] || []).map(c => (
+                    <option key={c.program_id} value={c.program_id}>{c.program_name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="modal-label">Year Level</label>
+                <select
+                  className="modal-select"
+                  style={{ marginBottom: 0 }}
+                  value={form.yearLevel}
+                  onChange={e => handleFormChange("yearLevel", e.target.value)}
+                >
+                  {yearLevels.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Status */}
+            <div style={{ marginBottom: "14px" }}>
+              <label className="modal-label">Status</label>
+              <select
+                className="modal-select"
+                style={{ marginBottom: 0 }}
+                value={form.status}
+                onChange={e => handleFormChange("status", e.target.value)}
+              >
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            {/* Address */}
+            <div style={{ marginBottom: "20px" }}>
+              <label className="modal-label">Address</label>
+              <input
+                className="modal-input"
+                style={{ marginBottom: 0 }}
+                placeholder="Complete address"
+                value={form.address}
+                onChange={e => handleFormChange("address", e.target.value)}
+              />
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <button
                 className="modal-submit-btn"
                 onClick={handleSubmit}
@@ -397,7 +574,15 @@ export default function Students() {
               >
                 {submitting ? "Saving..." : "Save Student"}
               </button>
+              <button
+                className="modal-cancel-btn"
+                style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "10px" }}
+                onClick={() => setShowModal(false)}
+              >
+                Cancel
+              </button>
             </div>
+
           </div>
         </div>
       )}
