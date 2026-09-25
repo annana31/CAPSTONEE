@@ -12,6 +12,8 @@ import SystemReports from "./SystemReports";
 import AuditLogs from "./AuditLogs";
 import { supabase } from "./supabaseClient";
 
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
+
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -30,11 +32,14 @@ export default function App() {
 
   const handleLogout = async () => {
     if (staffId) {
-      const { data, error } = await supabase
-        .from("tbl_staff")
-        .update({ status: "Inactive" })
-        .eq("staff_id", Number(staffId))
-        .select();
+      // Set status to Inactive on logout.
+      // Routed through Laravel (service role) instead of the anon key,
+      // since tbl_staff has RLS enabled with no anon write policy.
+      try {
+        await fetch(`${API_BASE}/staff/${staffId}/logout`, { method: "POST" });
+      } catch (statusErr) {
+        console.error("Failed to set staff status to Inactive:", statusErr);
+      }
     }
     setLoggedIn(false);
     setIsAdmin(false);

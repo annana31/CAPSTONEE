@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import "./styles/Departments.css";
 
-const API_BASE = "http://127.0.0.1:8000/api"; // adjust to your Laravel URL
+const API_BASE = "http://127.0.0.1:8000/api"; 
 
 const statusClass = (status) => {
   switch (status) {
@@ -14,7 +14,7 @@ const statusClass = (status) => {
 
 export default function Departments({ onViewStudent }) {
   const [colleges, setColleges] = useState([]);
-  const [selectedDept, setSelectedDept] = useState(null); // college_id
+  const [selectedDept, setSelectedDept] = useState(null); 
   const [students, setStudents] = useState([]);
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
@@ -25,7 +25,6 @@ export default function Departments({ onViewStudent }) {
   const token = localStorage.getItem("token");
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  // Load colleges + programs on mount
   useEffect(() => {
     fetch(`${API_BASE}/colleges`, { headers: authHeaders })
       .then(res => res.json())
@@ -34,7 +33,6 @@ export default function Departments({ onViewStudent }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // Load students when a college is selected
   useEffect(() => {
     if (!selectedDept) return;
     fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders })
@@ -63,7 +61,6 @@ export default function Departments({ onViewStudent }) {
     });
   }, [enrichedStudents, search, filterCourse]);
 
-  // Reset to page 1 whenever the filtered list changes (new search/course/department)
   useEffect(() => {
     setCurrentPage(1);
   }, [search, filterCourse, selectedDept]);
@@ -96,7 +93,6 @@ export default function Departments({ onViewStudent }) {
 
   if (loading) return <p>Loading departments...</p>;
 
-  // ── OVERVIEW ──
   if (!selectedDept) {
     return (
       <>
@@ -140,7 +136,6 @@ export default function Departments({ onViewStudent }) {
     );
   }
 
-  // ── BREAKDOWN ──
   return (
     <>
       {/* Back */}
@@ -270,25 +265,25 @@ export default function Departments({ onViewStudent }) {
             >
               Prev
             </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-              <button
-                key={page}
-                onClick={() => setCurrentPage(page)}
-                style={{
-                  border: "none",
-                  borderRadius: "8px",
-                  minWidth: "32px",
-                  height: "32px",
-                  fontSize: "0.85rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  background: page === currentPage ? "#1a1a5e" : "transparent",
-                  color: page === currentPage ? "#fff" : "#6b7280",
-                }}
-              >
-                {page}
-              </button>
-            ))}
+
+            <span
+              style={{
+                border: "none",
+                borderRadius: "8px",
+                minWidth: "32px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                background: "#1a1a5e",
+                color: "#fff",
+              }}
+            >
+              {currentPage}
+            </span>
+
             <button
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}

@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import "./styles/StaffAccounts.css";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 const EMPTY_FORM = { fullName: "", email: "", password: "" };
+const ROWS_PER_PAGE = 10;
 
 function getInitials(name) {
   return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
@@ -21,6 +22,7 @@ export default function StaffAccounts() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [saving, setSaving]             = useState(false);
   const [formError, setFormError]       = useState(null);
+  const [currentPage, setCurrentPage]   = useState(1);
 
   // ── Load staff (Admin excluded by backend) ───────────────────────────
   const loadStaff = useCallback(async () => {
@@ -46,6 +48,17 @@ export default function StaffAccounts() {
     s.id.toLowerCase().includes(search.toLowerCase()) ||
     (s.email || "").toLowerCase().includes(search.toLowerCase())
   );
+
+  // Reset to page 1 whenever the search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return filtered.slice(start, start + ROWS_PER_PAGE);
+  }, [filtered, currentPage]);
 
   // ── Modal helpers ────────────────────────────────────────────────────
   function openAdd() {
@@ -218,10 +231,10 @@ export default function StaffAccounts() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={6} className="sa-empty-row">Loading staff…</td></tr>
-              ) : filtered.length === 0 ? (
+              ) : paginated.length === 0 ? (
                 <tr><td colSpan={6} className="sa-empty-row">No staff found matching your search.</td></tr>
               ) : (
-                filtered.map(s => (
+                paginated.map(s => (
                   <tr key={s.id} className="sa-tr">
                     <td className="sa-td sa-td-id">{s.id}</td>
                     <td className="sa-td">
@@ -262,6 +275,70 @@ export default function StaffAccounts() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {!loading && filtered.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+            <span style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)" }}>
+              Showing <strong style={{ color: "#fff" }}>{(currentPage - 1) * ROWS_PER_PAGE + 1}</strong>
+              {" "}–{" "}
+              <strong style={{ color: "#fff" }}>{Math.min(currentPage * ROWS_PER_PAGE, filtered.length)}</strong>
+              {" "}of{" "}
+              <strong style={{ color: "#fff" }}>{filtered.length}</strong>
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  color: currentPage === 1 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)",
+                  cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                  padding: "6px 10px",
+                }}
+              >
+                Prev
+              </button>
+
+              <span
+                style={{
+                  border: "none",
+                  borderRadius: "8px",
+                  minWidth: "32px",
+                  height: "32px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  background: "#e6a817",
+                  color: "#1a1a5e",
+                }}
+              >
+                {currentPage}
+              </span>
+
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  color: currentPage === totalPages ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)",
+                  cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                  padding: "6px 10px",
+                }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ADD / EDIT MODAL */}

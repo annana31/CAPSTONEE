@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 import "./styles/AuditLogs.css";
 
 const activityTypes = ["Upload", "View", "Update", "Login", "Archive", "Request", "Delete", "Export"];
+const ROWS_PER_PAGE = 10;
 
 const badgeClass = (status) => {
   const s = (status || "").toLowerCase();
@@ -17,6 +18,7 @@ export default function AuditLogs() {
   const [errorMsg, setErrorMsg] = useState("");
   const [filterType,   setFilterType]   = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [currentPage, setCurrentPage]   = useState(1);
 
   useEffect(() => {
     let isMounted = true;
@@ -72,6 +74,17 @@ export default function AuditLogs() {
       return matchType && matchStatus;
     });
   }, [logs, filterType, filterStatus]);
+
+  // Reset to page 1 whenever the filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterType, filterStatus]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return filtered.slice(start, start + ROWS_PER_PAGE);
+  }, [filtered, currentPage]);
 
   const formatTimestamp = (ts) => {
     if (!ts) return "—";
@@ -153,12 +166,12 @@ export default function AuditLogs() {
               <tr>
                 <td colSpan={6} className="al-empty">Couldn't load logs: {errorMsg}</td>
               </tr>
-            ) : filtered.length === 0 ? (
+            ) : paginated.length === 0 ? (
               <tr>
                 <td colSpan={6} className="al-empty">No logs found.</td>
               </tr>
             ) : (
-              filtered.map((log, i) => (
+              paginated.map((log, i) => (
                 <tr key={log.id ?? i} className={i % 2 === 0 ? "al-row-even" : "al-row-odd"}>
                   <td className="al-td-timestamp">{formatTimestamp(log.timestamp)}</td>
                   <td className="al-td-name">{log.name}</td>
@@ -174,6 +187,71 @@ export default function AuditLogs() {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination — single current-page indicator only */}
+      {!loading && !errorMsg && filtered.length > 0 && totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+          <span style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)" }}>
+            Showing <strong style={{ color: "#fff" }}>{(currentPage - 1) * ROWS_PER_PAGE + 1}</strong>
+            {" "}–{" "}
+            <strong style={{ color: "#fff" }}>{Math.min(currentPage * ROWS_PER_PAGE, filtered.length)}</strong>
+            {" "}of{" "}
+            <strong style={{ color: "#fff" }}>{filtered.length}</strong>
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === 1 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Prev
+            </button>
+
+            {/* Single current-page pill — no list of page numbers */}
+            <span
+              style={{
+                border: "none",
+                borderRadius: "8px",
+                minWidth: "32px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                background: "#e6a817",
+                color: "#1a1a5e",
+              }}
+            >
+              {currentPage}
+            </span>
+
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === totalPages ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.6)",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

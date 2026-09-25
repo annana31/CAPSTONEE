@@ -2,6 +2,8 @@ import { useState } from "react";
 import "./styles/Login.css";
 import { supabase } from "./supabaseClient";
 
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
+
 export default function Login({ onLogin, onStudentAccess }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -40,13 +42,20 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
-      // Set status to Active on successful login
-      await supabase
-        .from("tbl_staff")
-        .update({ status: "Active" })
-        .eq("staff_id", data.staff_id);
+      // Set status to Active on successful login.
+      // Routed through Laravel (service role) instead of the anon key,
+      // since tbl_staff has RLS enabled with no anon write policy.
+      try {
+        await fetch(`${API_BASE}/staff/${data.staff_id}/login`, { method: "POST" });
+      } catch (statusErr) {
+        // Non-fatal: login still proceeds even if the status ping fails,
+        // but log it so it's visible during testing.
+        console.error("Failed to set staff status to Active:", statusErr);
+      }
 
-        // ── Record login activity so last_login shows in Staff Accounts ──
+      // ── Record login activity so last_login shows in Staff Accounts ──
+      // NOTE: this insert also goes through the anon key. If tbl_system_activity
+      // gets RLS enabled later, move this into the same Laravel /login endpoint too.
       await supabase
         .from("tbl_system_activity")
         .insert({
