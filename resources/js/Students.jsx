@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 
 const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
 const intToYearLevel = { 1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year" };
+const ROWS_PER_PAGE = 10;
 
 const statusClass = (status) => {
   if (status === "Active") return "status-badge status-active";
@@ -49,6 +50,7 @@ export default function Students() {
   const [submitting, setSubmitting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [form, setForm] = useState({
     id: "", department: "", course: "", email: "",
@@ -129,6 +131,17 @@ export default function Students() {
     const matchCourse = filterCourse ? s.course === filterCourse : true;
     return matchSearch && matchDept && matchYear && matchCourse;
   });
+
+  // Reset to page 1 whenever the filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterDept, filterYear, filterCourse]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return filtered.slice(start, start + ROWS_PER_PAGE);
+  }, [filtered, currentPage]);
 
   const handleFormChange = (field, value) => {
     setForm(prev => ({
@@ -260,10 +273,10 @@ export default function Students() {
           <tbody>
             {loading ? (
               <tr><td colSpan={7} className="students-empty">Loading students...</td></tr>
-            ) : filtered.length === 0 ? (
+            ) : paginated.length === 0 ? (
               <tr><td colSpan={7} className="students-empty">No students found.</td></tr>
             ) : (
-              filtered.map((s, i) => (
+              paginated.map((s, i) => (
                 <tr key={s.id} className={i % 2 === 0 ? "students-row-even" : "students-row-odd"}>
                   <td className="students-td-first">{s.id}</td>
                   <td className="students-td-name">{s.name}</td>
@@ -282,6 +295,70 @@ export default function Students() {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {!loading && filtered.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+            Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * ROWS_PER_PAGE + 1}</strong>
+            {" "}–{" "}
+            <strong style={{ color: "#111827" }}>{Math.min(currentPage * ROWS_PER_PAGE, filtered.length)}</strong>
+            {" "}of{" "}
+            <strong style={{ color: "#111827" }}>{filtered.length}</strong>
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Prev
+            </button>
+
+            <span
+              style={{
+                border: "none",
+                borderRadius: "8px",
+                minWidth: "32px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                background: "#1a1a5e",
+                color: "#fff",
+              }}
+            >
+              {currentPage}
+            </span>
+
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Add Student Modal */}
       {showModal && (
