@@ -19,6 +19,8 @@ export default function Departments({ onViewStudent }) {
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 10;
 
   const token = localStorage.getItem("token");
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -60,6 +62,17 @@ export default function Departments({ onViewStudent }) {
       return matchSearch && matchCourse;
     });
   }, [enrichedStudents, search, filterCourse]);
+
+  // Reset to page 1 whenever the filtered list changes (new search/course/department)
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterCourse, selectedDept]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * rowsPerPage;
+    return filtered.slice(start, start + rowsPerPage);
+  }, [filtered, currentPage]);
 
   const totalStudents = filtered.length;
   const totalDocs = filtered.reduce((sum, s) => sum + s.documents, 0);
@@ -199,12 +212,12 @@ export default function Departments({ onViewStudent }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {paginated.length === 0 ? (
               <tr>
                 <td colSpan={5} className="dept-empty">No students found.</td>
               </tr>
             ) : (
-              filtered.map((s, i) => {
+              paginated.map((s, i) => {
                 const pct = Math.round((s.documents / 8) * 100);
                 return (
                   <tr key={s.student_id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
@@ -230,6 +243,70 @@ export default function Departments({ onViewStudent }) {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {filtered.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+            Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * rowsPerPage + 1}</strong>
+            {" "}–{" "}
+            <strong style={{ color: "#111827" }}>{Math.min(currentPage * rowsPerPage, filtered.length)}</strong>
+            {" "}of{" "}
+            <strong style={{ color: "#111827" }}>{filtered.length}</strong>
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Prev
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+              <button
+                key={page}
+                onClick={() => setCurrentPage(page)}
+                style={{
+                  border: "none",
+                  borderRadius: "8px",
+                  minWidth: "32px",
+                  height: "32px",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background: page === currentPage ? "#1a1a5e" : "transparent",
+                  color: page === currentPage ? "#fff" : "#6b7280",
+                }}
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
