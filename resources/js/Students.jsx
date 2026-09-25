@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
+import StudentProfile from "./StudentProfile";
 import "./styles/Students.css";
 
-const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
-const statuses = ["Active", "LOA", "Inactive", "Graduated"];
-const intToYearLevel = { 1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year" };
-const yearLevelToInt = { "1st Year": 1, "2nd Year": 2, "3rd Year": 3, "4th Year": 4, "5th Year": 5 };
-
-const currentYear = new Date().getFullYear();
-const yearOptions = Array.from({ length: 10 }, (_, i) => currentYear - i);
+const yearLevels = [
+  { value: 1, label: "1st Year" },
+  { value: 2, label: "2nd Year" },
+  { value: 3, label: "3rd Year" },
+  { value: 4, label: "4th Year" },
+  { value: 5, label: "5th Year" },
+];
 
 const statusClass = (status) => {
   if (status === "Active") return "status-badge status-active";
@@ -16,576 +17,305 @@ const statusClass = (status) => {
   return "status-badge status-inactive";
 };
 
-// ── OCR: Extract name fields via Laravel + Surya OCR backend ──
-const extractNameFromFile = async (file) => {
-  const formData = new FormData();
-  formData.append("file", file);
+// ------------------------------------------------------------
+// Table styling (inline so it doesn't depend on extra CSS classes)
+// ------------------------------------------------------------
+const NAVY = "#1a1a6e";
+const GREY = "#6b7280";
 
-  const response = await fetch("http://127.0.0.1:8000/api/ocr/extract", {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.message || "OCR request failed");
-  }
-
-  const data = await response.json();
-  if (!data.success) throw new Error(data.message || "OCR failed");
-
-  return {
-    first_name: data.first_name || "",
-    last_name: data.last_name || "",
-    middle_name: data.middle_name || "",
-  };
+const headerRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
 };
 
-export default function Students({ onViewStudent }) {
+const addBtnStyle = {
+  background: NAVY,
+  color: "#fff",
+  fontWeight: 700,
+  fontSize: "1rem",
+  border: "none",
+  borderRadius: "10px",
+  padding: "14px 28px",
+  cursor: "pointer",
+};
+
+const tableStyle = {
+  width: "100%",
+  borderCollapse: "collapse",
+  textAlign: "left",
+};
+
+const thStyle = {
+  padding: "26px 16px",
+  fontSize: "0.78rem",
+  fontWeight: 700,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  color: "#8a8fa3",
+  textAlign: "left",
+  verticalAlign: "middle",
+};
+
+const tdBase = {
+  padding: "22px 16px",
+  verticalAlign: "middle",
+  textAlign: "left",
+  borderBottom: "1px solid #eef0f4",
+};
+
+const tdStyle = { ...tdBase, color: GREY };
+const tdIdStyle = { ...tdBase, color: NAVY, fontWeight: 700, paddingLeft: "32px" };
+const tdNameStyle = { ...tdBase, color: "#141446", fontWeight: 700 };
+
+export default function Students({ onAddStudent }) {
   const [students, setStudents] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [coursesByDept, setCoursesByDept] = useState({});
-  const [search, setSearch] = useState("");
-  const [filterDept, setFilterDept] = useState("");
-  const [filterYear, setFilterYear] = useState("");
-  const [filterCourse, setFilterCourse] = useState("");
-  const [showModal, setShowModal] = useState(false);
+  const [colleges, setColleges] = useState([]);
+  const [programs, setPrograms] = useState([]);
+
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [extracting, setExtracting] = useState(false);
-  const [extractError, setExtractError] = useState("");
-  const [fileName, setFileName] = useState("");
+  const [error, setError] = useState("");
 
-  const [form, setForm] = useState({
-    enrollYear: String(currentYear),
-    idSuffix: "",
-    first_name: "",
-    last_name: "",
-    middle_name: "",
-    birthdate: "",
-    gender: "Female",
-    email: "",
-    contact: "",
-    department: "",
-    course: "",
-    yearLevel: "1st Year",
-    status: "Active",
-    address: "",
-  });
+  const [search, setSearch] = useState("");
+  const [filterCollege, setFilterCollege] = useState("");
+  const [filterProgram, setFilterProgram] = useState("");
+  const [filterYear, setFilterYear] = useState("");
 
-  const generatedId = form.enrollYear && form.idSuffix
-    ? `${form.enrollYear}${form.idSuffix.padStart(6, "0")}`
-    : `${form.enrollYear}000000`;
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
 
-  // ── BACKEND: Fetch colleges ──
+  // ============================================================
+  // LOAD STUDENTS, COLLEGES AND PROGRAMS FROM SUPABASE
+  // ============================================================
+
   useEffect(() => {
-    const fetchColleges = async () => {
-      const { data, error } = await supabase
-        .from("tbl_college")
-        .select("college_id, college_name")
-        .order("college_name");
-      if (!error && data) setDepartments(data);
-    };
-    fetchColleges();
-  }, []);
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError("");
 
-  // ── BACKEND: Fetch programs grouped by college_id ──
-  useEffect(() => {
-    const fetchPrograms = async () => {
-      const { data, error } = await supabase
-        .from("tbl_program")
-        .select("program_id, program_name, college_id")
-        .order("program_name");
-      if (!error && data) {
-        const grouped = {};
-        data.forEach(p => {
-          if (!grouped[p.college_id]) grouped[p.college_id] = [];
-          grouped[p.college_id].push({ program_id: p.program_id, program_name: p.program_name });
-        });
-        setCoursesByDept(grouped);
+        const [studentRes, collegeRes, programRes] = await Promise.all([
+          supabase.from("tbl_student").select("*").order("last_name"),
+          supabase.from("tbl_college").select("*").order("college_name"),
+          supabase.from("tbl_program").select("*").order("program_name"),
+        ]);
+
+        if (studentRes.error) throw studentRes.error;
+        if (collegeRes.error) throw collegeRes.error;
+        if (programRes.error) throw programRes.error;
+
+        setStudents(studentRes.data || []);
+        setColleges(collegeRes.data || []);
+        setPrograms(programRes.data || []);
+      } catch (err) {
+        console.error("Load error:", err);
+        setError(err.message || "Failed to load students.");
+      } finally {
+        setLoading(false);
       }
     };
-    fetchPrograms();
-  }, []);
 
-  // ── BACKEND: Fetch students ──
-  const fetchStudents = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("tbl_student")
-      .select(`
-        student_id, first_name, last_name, middle_name,
-        birthdate, gender, email, contact_number, address,
-        year_level, status,
-        tbl_college (college_id, college_name),
-        tbl_program (program_id, program_name)
-      `)
-      .order("last_name");
+    // Reload whenever we come back from a profile so edits show in the list
+    if (selectedStudentId === null) load();
+  }, [selectedStudentId]);
 
-    if (!error && data) {
-      setStudents(data.map(s => ({
-        id: s.student_id,
-        name: `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
-        first_name: s.first_name ?? "",
-        last_name: s.last_name ?? "",
-        middle_name: s.middle_name ?? "",
-        birthdate: s.birthdate ?? "",
-        gender: s.gender ?? "",
-        email: s.email ?? "",
-        contact: s.contact_number ?? "",
-        address: s.address ?? "",
-        department: s.tbl_college?.college_name ?? "—",
-        college_id: s.tbl_college?.college_id ?? null,
-        course: s.tbl_program?.program_name ?? "—",
-        program_id: s.tbl_program?.program_id ?? null,
-        year: intToYearLevel[s.year_level] ?? `Year ${s.year_level}`,
-        status: s.status ?? "Active",
-      })));
-    }
-    setLoading(false);
-  };
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
-  useEffect(() => { fetchStudents(); }, []);
+  const collegeOf = (s) =>
+    colleges.find((c) => Number(c.college_id) === Number(s.college_id));
 
-  // ── FILTER ──
-  const filtered = students.filter(s => {
-    const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
-      String(s.id).includes(search);
-    const matchDept = filterDept ? s.college_id === Number(filterDept) : true;
-    const matchYear = filterYear ? s.year === filterYear : true;
-    const matchCourse = filterCourse ? s.course === filterCourse : true;
-    return matchSearch && matchDept && matchYear && matchCourse;
+  const programOf = (s) =>
+    programs.find((p) => Number(p.program_id) === Number(s.program_id));
+
+  // List shows "First Last" (middle name is only shown on the profile)
+  const listNameOf = (s) =>
+    [s.first_name, s.last_name].filter(Boolean).join(" ");
+
+  const yearLabel = (value) =>
+    yearLevels.find((y) => Number(y.value) === Number(value))?.label || "—";
+
+  const programOptions = filterCollege
+    ? programs.filter((p) => Number(p.college_id) === Number(filterCollege))
+    : programs;
+
+  const filtered = students.filter((s) => {
+    const term = search.trim().toLowerCase();
+
+    const matchSearch =
+      !term ||
+      [s.first_name, s.middle_name, s.last_name]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(term) ||
+      String(s.student_id).includes(term);
+
+    const matchCollege = filterCollege
+      ? Number(s.college_id) === Number(filterCollege)
+      : true;
+
+    const matchProgram = filterProgram
+      ? Number(s.program_id) === Number(filterProgram)
+      : true;
+
+    const matchYear = filterYear
+      ? Number(s.year_level) === Number(filterYear)
+      : true;
+
+    return matchSearch && matchCollege && matchProgram && matchYear;
   });
 
-  const handleFormChange = (field, value) => {
-    setForm(prev => ({
-      ...prev,
-      [field]: value,
-      ...(field === "department" ? { course: "" } : {}),
-    }));
-  };
+  // ============================================================
+  // OPEN PROFILE PAGE
+  // ============================================================
 
-  // ── OCR: Handle file attach and auto-extract name ──
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  if (selectedStudentId !== null) {
+    return (
+      <StudentProfile
+        studentId={selectedStudentId}
+        onBack={() => setSelectedStudentId(null)}
+      />
+    );
+  }
 
-    setFileName(file.name);
-    setExtractError("");
-    setExtracting(true);
-    setForm(prev => ({ ...prev, first_name: "", last_name: "", middle_name: "" }));
-
-    try {
-      const extracted = await extractNameFromFile(file);
-      setForm(prev => ({
-        ...prev,
-        first_name: extracted.first_name || prev.first_name,
-        last_name: extracted.last_name || prev.last_name,
-        middle_name: extracted.middle_name || prev.middle_name,
-      }));
-    } catch (err) {
-      console.error("OCR extraction failed:", err);
-      setExtractError("Could not extract name. Please fill in manually.");
-    } finally {
-      setExtracting(false);
-    }
-  };
-
-  // ── BACKEND: Insert new student ──
-  const handleSubmit = async () => {
-    if (!form.first_name || !form.last_name || !form.department || !form.course) return;
-    setSubmitting(true);
-    try {
-      const { error } = await supabase
-        .from("tbl_student")
-        .insert({
-          student_id: Number(generatedId),
-          first_name: form.first_name,
-          last_name: form.last_name,
-          middle_name: form.middle_name || null,
-          birthdate: form.birthdate || null,
-          gender: form.gender || null,
-          email: form.email || null,
-          contact_number: form.contact || null,
-          address: form.address || null,
-          college_id: Number(form.department),
-          program_id: Number(form.course),
-          year_level: yearLevelToInt[form.yearLevel] || 1,
-          status: form.status,
-        });
-
-      if (error) {
-        console.error("Insert error:", error);
-        alert("Failed to save student: " + error.message);
-        return;
-      }
-
-      await fetchStudents();
-      setForm({
-        enrollYear: String(currentYear),
-        idSuffix: "",
-        first_name: "",
-        last_name: "",
-        middle_name: "",
-        birthdate: "",
-        gender: "Female",
-        email: "",
-        contact: "",
-        department: "",
-        course: "",
-        yearLevel: "1st Year",
-        status: "Active",
-        address: "",
-      });
-      setFileName("");
-      setExtractError("");
-      setShowModal(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  // ============================================================
+  // LIST
+  // ============================================================
 
   return (
     <>
-      {/* Header */}
-      <div className="students-header">
+      <div className="students-header" style={headerRowStyle}>
         <h2 className="students-title">Student Records</h2>
-        <button className="students-add-btn" onClick={() => setShowModal(true)}>
+
+        <button
+          type="button"
+          style={addBtnStyle}
+          onClick={() => onAddStudent && onAddStudent()}
+        >
           Add Student
         </button>
       </div>
 
-      {/* Filter Bar */}
+      {error && (
+        <div className="mb-4 p-3 rounded bg-red-100 text-red-700">{error}</div>
+      )}
+
       <div className="students-filter-bar">
         <input
           type="text"
           placeholder="Search by name or student ID..."
           className="students-search"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={(e) => setSearch(e.target.value)}
         />
-        <select className="students-select" value={filterDept} onChange={e => { setFilterDept(e.target.value); setFilterCourse(""); }}>
+
+        <select
+          className="students-select"
+          value={filterCollege}
+          onChange={(e) => {
+            setFilterCollege(e.target.value);
+            setFilterProgram("");
+          }}
+        >
           <option value="">All Departments</option>
-          {departments.map(d => (
-            <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
+          {colleges.map((c) => (
+            <option key={c.college_id} value={c.college_id}>
+              {c.college_name}
+            </option>
           ))}
         </select>
-        <select className="students-select" value={filterCourse} onChange={e => setFilterCourse(e.target.value)}>
+
+        <select
+          className="students-select"
+          value={filterProgram}
+          onChange={(e) => setFilterProgram(e.target.value)}
+        >
           <option value="">All Courses</option>
-          {(filterDept ? (coursesByDept[Number(filterDept)] || []) : Object.values(coursesByDept).flat())
-            .map(c => (
-              <option key={c.program_id} value={c.program_name}>{c.program_name}</option>
-            ))}
+          {programOptions.map((p) => (
+            <option key={p.program_id} value={p.program_id}>
+              {p.program_name}
+            </option>
+          ))}
         </select>
-        <select className="students-select" value={filterYear} onChange={e => setFilterYear(e.target.value)}>
+
+        <select
+          className="students-select"
+          value={filterYear}
+          onChange={(e) => setFilterYear(e.target.value)}
+        >
           <option value="">All Year Levels</option>
-          {yearLevels.map(y => <option key={y} value={y}>{y}</option>)}
+          {yearLevels.map((y) => (
+            <option key={y.value} value={y.value}>
+              {y.label}
+            </option>
+          ))}
         </select>
       </div>
 
-      {/* Table */}
       <div className="students-table-wrapper">
-        <table className="students-table">
+        <table className="students-table" style={tableStyle}>
           <thead>
             <tr className="students-thead">
-              <th className="students-th-first">Student ID</th>
-              <th className="students-th">Full Name</th>
-              <th className="students-th">Department</th>
-              <th className="students-th">Course</th>
-              <th className="students-th">Year Level</th>
-              <th className="students-th">Status</th>
-              <th className="students-th">Record</th>
+              <th style={{ ...thStyle, paddingLeft: "32px" }}>Student ID</th>
+              <th style={thStyle}>Full Name</th>
+              <th style={thStyle}>Department</th>
+              <th style={thStyle}>Course</th>
+              <th style={{ ...thStyle, width: "110px" }}>Year Level</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Record</th>
             </tr>
           </thead>
+
           <tbody>
-            {loading ? (
-              <tr><td colSpan={7} className="students-empty">Loading students...</td></tr>
-            ) : filtered.length === 0 ? (
-              <tr><td colSpan={7} className="students-empty">No students found.</td></tr>
-            ) : (
-              filtered.map((s, i) => (
-                <tr key={s.id} className={i % 2 === 0 ? "students-row-even" : "students-row-odd"}>
-                  <td className="students-td-first">{s.id}</td>
-                  <td className="students-td-name">{s.name}</td>
-                  <td className="students-td">{s.department}</td>
-                  <td className="students-td">{s.course}</td>
-                  <td className="students-td">{s.year}</td>
-                  <td className="students-td">
-                    <span className={statusClass(s.status)}>{s.status}</span>
+            {loading && (
+              <tr>
+                <td colSpan={7} style={tdStyle}>
+                  Loading students...
+                </td>
+              </tr>
+            )}
+
+            {!loading && filtered.length === 0 && (
+              <tr>
+                <td colSpan={7} style={tdStyle}>
+                  No students found.
+                </td>
+              </tr>
+            )}
+
+            {!loading &&
+              filtered.map((student) => (
+                <tr key={student.student_id} style={{ background: "#fff" }}>
+                  <td style={tdIdStyle}>{student.student_id}</td>
+                  <td style={tdNameStyle}>{listNameOf(student)}</td>
+                  <td style={tdStyle}>
+                    {collegeOf(student)?.college_name || "—"}
                   </td>
-                  <td className="students-td">
-                    <button className="students-view-btn" onClick={() => onViewStudent && onViewStudent(s)}>
+                  <td style={tdStyle}>
+                    {programOf(student)?.program_name || "—"}
+                  </td>
+                  <td style={tdStyle}>{yearLabel(student.year_level)}</td>
+
+                  <td style={tdBase}>
+                    <span className={statusClass(student.status)}>
+                      {student.status}
+                    </span>
+                  </td>
+
+                  <td style={tdBase}>
+                    <button
+                      className="students-view-btn"
+                      onClick={() => setSelectedStudentId(student.student_id)}
+                    >
                       View
                     </button>
                   </td>
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </table>
       </div>
-
-      {/* Add Student Modal */}
-      {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div
-            className="modal-card"
-            style={{ maxWidth: "600px", maxHeight: "90vh", overflowY: "auto" }}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-              <h3 className="modal-title" style={{ margin: 0 }}>Add New Student</h3>
-              <button
-                onClick={() => setShowModal(false)}
-                style={{ background: "none", border: "none", color: "#9ca3af", fontSize: "18px", cursor: "pointer", lineHeight: 1 }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Extract Information */}
-            <label
-              className="modal-extract-btn"
-              style={{ display: "block", marginBottom: "8px", opacity: extracting ? 0.7 : 1, cursor: extracting ? "not-allowed" : "pointer" }}
-            >
-              {extracting
-                ? "⏳ Extracting name from document... (this may take a few minutes)"
-                : fileName
-                  ? `📄 ${fileName}`
-                  : "Extract Information — Attach a document"}
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                className="hidden"
-                disabled={extracting}
-                onChange={handleFileChange}
-              />
-            </label>
-
-            {extractError && (
-              <p style={{ color: "red", fontSize: "0.8rem", marginBottom: "12px" }}>{extractError}</p>
-            )}
-
-            {/* Student ID Generator */}
-            <div style={{ background: "rgba(230,168,23,0.08)", border: "1px solid rgba(230,168,23,0.2)", borderRadius: "10px", padding: "14px 16px", marginBottom: "20px" }}>
-              <p className="modal-label" style={{ marginBottom: "10px", color: "#e6a817" }}>Student ID Generator</p>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <select
-                  className="modal-select"
-                  style={{ flex: 1, marginBottom: 0 }}
-                  value={form.enrollYear}
-                  onChange={e => handleFormChange("enrollYear", e.target.value)}
-                >
-                  {yearOptions.map(y => <option key={y} value={String(y)}>{y}</option>)}
-                </select>
-                <span style={{ color: "#9ca3af", fontWeight: "bold", fontSize: "16px" }}>—</span>
-                <input
-                  className="modal-input"
-                  style={{ flex: 2, marginBottom: 0 }}
-                  placeholder="123456"
-                  maxLength={6}
-                  value={form.idSuffix}
-                  onChange={e => handleFormChange("idSuffix", e.target.value.replace(/\D/g, ""))}
-                />
-                <div style={{
-                  background: "rgba(26,26,110,0.08)",
-                  border: "1px solid rgba(26,26,110,0.2)",
-                  borderRadius: "8px",
-                  padding: "10px 14px",
-                  fontSize: "13px",
-                  fontWeight: "bold",
-                  color: "#1a1a6e",
-                  whiteSpace: "nowrap",
-                }}>
-                  {generatedId}
-                </div>
-              </div>
-            </div>
-
-            {/* First Name & Last Name */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label className="modal-label">First Name</label>
-                <input
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  placeholder={extracting ? "Extracting..." : "First name"}
-                  value={form.first_name}
-                  disabled={extracting}
-                  onChange={e => handleFormChange("first_name", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="modal-label">Last Name</label>
-                <input
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  placeholder={extracting ? "Extracting..." : "Last name"}
-                  value={form.last_name}
-                  disabled={extracting}
-                  onChange={e => handleFormChange("last_name", e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Middle Name & Birthdate */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label className="modal-label">Middle Name <span style={{ fontWeight: 400, color: "#999" }}>(optional)</span></label>
-                <input
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  placeholder={extracting ? "Extracting..." : "Middle name"}
-                  value={form.middle_name}
-                  disabled={extracting}
-                  onChange={e => handleFormChange("middle_name", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="modal-label">Birthdate</label>
-                <input
-                  type="date"
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  value={form.birthdate}
-                  onChange={e => handleFormChange("birthdate", e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Gender & Email */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label className="modal-label">Gender</label>
-                <select
-                  className="modal-select"
-                  style={{ marginBottom: 0 }}
-                  value={form.gender}
-                  onChange={e => handleFormChange("gender", e.target.value)}
-                >
-                  <option>Female</option>
-                  <option>Male</option>
-                  <option>Prefer not to say</option>
-                </select>
-              </div>
-              <div>
-                <label className="modal-label">Email</label>
-                <input
-                  type="email"
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  placeholder="Email address"
-                  value={form.email}
-                  onChange={e => handleFormChange("email", e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Contact & Department */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label className="modal-label">Contact Number</label>
-                <input
-                  className="modal-input"
-                  style={{ marginBottom: 0 }}
-                  placeholder="09XXXXXXXXX"
-                  value={form.contact}
-                  onChange={e => handleFormChange("contact", e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="modal-label">Department</label>
-                <select
-                  className="modal-select"
-                  style={{ marginBottom: 0 }}
-                  value={form.department}
-                  onChange={e => handleFormChange("department", e.target.value)}
-                >
-                  <option value="">Select Department</option>
-                  {departments.map(d => (
-                    <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Course & Year Level */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label className="modal-label">Course</label>
-                <select
-                  className="modal-select"
-                  style={{ marginBottom: 0 }}
-                  value={form.course}
-                  onChange={e => handleFormChange("course", e.target.value)}
-                  disabled={!form.department}
-                >
-                  <option value="">Select Course</option>
-                  {(coursesByDept[Number(form.department)] || []).map(c => (
-                    <option key={c.program_id} value={c.program_id}>{c.program_name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="modal-label">Year Level</label>
-                <select
-                  className="modal-select"
-                  style={{ marginBottom: 0 }}
-                  value={form.yearLevel}
-                  onChange={e => handleFormChange("yearLevel", e.target.value)}
-                >
-                  {yearLevels.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
-            </div>
-
-            {/* Status */}
-            <div style={{ marginBottom: "14px" }}>
-              <label className="modal-label">Status</label>
-              <select
-                className="modal-select"
-                style={{ marginBottom: 0 }}
-                value={form.status}
-                onChange={e => handleFormChange("status", e.target.value)}
-              >
-                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-
-            {/* Address */}
-            <div style={{ marginBottom: "20px" }}>
-              <label className="modal-label">Address</label>
-              <input
-                className="modal-input"
-                style={{ marginBottom: 0 }}
-                placeholder="Complete address"
-                value={form.address}
-                onChange={e => handleFormChange("address", e.target.value)}
-              />
-            </div>
-
-            {/* Footer */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <button
-                className="modal-submit-btn"
-                onClick={handleSubmit}
-                disabled={submitting || extracting}
-              >
-                {submitting ? "Saving..." : "Save Student"}
-              </button>
-              <button
-                className="modal-cancel-btn"
-                style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "10px" }}
-                onClick={() => setShowModal(false)}
-              >
-                Cancel
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
     </>
   );
 }
