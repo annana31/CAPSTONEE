@@ -1,65 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import "./styles/Departments.css";
 
-const departmentData = {
-  CEA: {
-    full: "College of Engineering & Architecture",
-    courses: ["BS Architecture", "BS Civil Engineering", "BS Mechanical Engineering", "BS Computer Engineering", "BS Geodetic Engineering", "BS Electrical Engineering", "BS Electronics Engineering", "Masters of Engineering Program", "Master of Science in Electrical Engineering", "Master of Science in Sustainable Development, Major in Urban Planning and Sustainable Development", "Professional Science Masters in Power Systems Engineering and Management", "Doctor of Philosophy in Energy Engineering"],
-    completion: 68,
-  },
-  CITC: {
-    full: "College of IT & Computing",
-    courses: ["BS Computer Science", "BS Data Science", "BS Information Technology", "BS Technology Communication Management"],
-    completion: 74,
-  },
-  CSM: {
-    full: "College of Science & Mathematics",
-    courses: ["BS Applied Mathematics", "BS Applied Physics", "BS Chemistry", "BS Environmental Science", "BS Food Technology", "Master of Science in Applied Mathematics", "Master of Science in Environmental Science and Technology – Major in Natural Science", "Doctor of Philosophy in Applied Mathematics"],
-    completion: 71,
-  },
-  CSTE: {
-    full: "College of Science & Technology Education",
-    courses: ["BS Education Major in Science", "BS Education Major in Mathematics", "BS Technology and Livelihood Education", "BS Technical-Vocational Teacher Education", "Master of Science in Mathematics Education", "Master of Science in Science Education (Chemistry)", "Master of Science in Science Education (Physics)", "Master of Arts in Teaching Special Education", "Master of Arts in Teaching English as a Second Language", "Master in Technical and Technology Education", "Doctor of Philosophy in Mathematics Education", "Doctor of Philosophy in Science Education Major in Chemistry", "Doctor of Technology Education"],
-    completion: 63,
-  },
-  COT: {
-    full: "College of Technology",
-    courses: ["BS Electronics Technology", "BS Autotronics", "BS Energy Systems and Management", "BS Electro-Mechanical Technology", "BS Manufacturing Engineering Technology"],
-    completion: 69,
-  },
-  COM: {
-    full: "College of Management",
-    courses: ["BS Nursing"],
-    completion: 77,
-  },
-  SHS: {
-    full: "Senior High School",
-    courses: ["STEM"],
-    completion: 82,
-  },
-};
-
-// Generate mock students per department
-const generateStudents = (dept) => {
-  const courses = departmentData[dept].courses;
-  const statuses = ["Active", "Active", "Active", "LOA", "Graduated", "Inactive"];
-  const firstNames = ["Juan", "Maria", "Carlo", "Ana", "Leo", "Rosa", "Pio", "Sheila", "Mark", "Luz", "Jose", "Clara"];
-  const lastNames = ["dela Cruz", "Santos", "Reyes", "Villanueva", "Fernandez", "Lim", "Mangubat", "Gomez", "Uy", "Garcia", "Bautista", "Torres"];
-  const years = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
-
-  return Array.from({ length: 20 }, (_, i) => ({
-    id: `20${20 + (i % 5)}${Math.floor(100000 + Math.random() * 900000)}`.slice(0, 10),
-    name: `${firstNames[i % firstNames.length]} ${lastNames[(i + 3) % lastNames.length]}`,
-    course: courses[i % courses.length],
-    year: years[i % years.length],
-    status: statuses[i % statuses.length],
-    documents: Math.floor(3 + Math.random() * 5),
-  }));
-};
-
-const allStudents = Object.fromEntries(
-  Object.keys(departmentData).map(dept => [dept, generateStudents(dept)])
-);
+const API_BASE = "http://127.0.0.1:8000/api"; // adjust to your Laravel URL
 
 const statusClass = (status) => {
   switch (status) {
@@ -71,30 +13,64 @@ const statusClass = (status) => {
 };
 
 export default function Departments({ onViewStudent }) {
-  const [selectedDept, setSelectedDept] = useState(null);
+  const [colleges, setColleges] = useState([]);
+  const [selectedDept, setSelectedDept] = useState(null); // college_id
+  const [students, setStudents] = useState([]);
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const students = selectedDept ? allStudents[selectedDept] : [];
+  const token = localStorage.getItem("token");
+  const authHeaders = { Authorization: `Bearer ${token}` };
+
+  // Load colleges + programs on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/colleges`, { headers: authHeaders })
+      .then(res => res.json())
+      .then(data => setColleges(data))
+      .catch(err => console.error("Failed to load colleges:", err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Load students when a college is selected
+  useEffect(() => {
+    if (!selectedDept) return;
+    fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders })
+      .then(res => res.json())
+      .then(data => setStudents(data))
+      .catch(err => console.error("Failed to load students:", err));
+  }, [selectedDept]);
+
+  const dept = colleges.find(c => c.college_id === selectedDept);
+
+  const enrichedStudents = useMemo(() => {
+    return students.map(s => ({
+      ...s,
+      course: dept?.programs?.find(p => p.program_id === s.program_id)?.program_name ?? "",
+      year: s.year_level,
+      documents: s.documents ?? 0, // real count from the API
+    }));
+  }, [students, dept]);
 
   const filtered = useMemo(() => {
-    return students.filter(s => {
-      const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) || s.id.includes(search);
+    return enrichedStudents.filter(s => {
+      const fullName = `${s.first_name} ${s.last_name}`.toLowerCase();
+      const matchSearch = fullName.includes(search.toLowerCase()) || String(s.student_id).includes(search);
       const matchCourse = filterCourse ? s.course === filterCourse : true;
       return matchSearch && matchCourse;
     });
-  }, [students, search, filterCourse]);
+  }, [enrichedStudents, search, filterCourse]);
 
   const totalStudents = filtered.length;
   const totalDocs = filtered.reduce((sum, s) => sum + s.documents, 0);
   const completionRate = selectedDept
     ? filterCourse
       ? Math.round(50 + (filterCourse.length % 30))
-      : departmentData[selectedDept].completion
+      : (dept?.completion ?? 0)
     : 0;
 
-  const handleDeptClick = (dept) => {
-    setSelectedDept(dept);
+  const handleDeptClick = (collegeId) => {
+    setSelectedDept(collegeId);
     setFilterCourse("");
     setSearch("");
   };
@@ -104,6 +80,8 @@ export default function Departments({ onViewStudent }) {
     setFilterCourse("");
     setSearch("");
   };
+
+  if (loading) return <p>Loading departments...</p>;
 
   // ── OVERVIEW ──
   if (!selectedDept) {
@@ -115,33 +93,32 @@ export default function Departments({ onViewStudent }) {
         </div>
 
         <div className="dept-grid">
-          {Object.entries(departmentData).map(([abbr, data]) => (
-            <div key={abbr} className="dept-card" onClick={() => handleDeptClick(abbr)}>
+          {colleges.map((c) => (
+            <div key={c.college_id} className="dept-card" onClick={() => handleDeptClick(c.college_id)}>
               <div className="dept-card-top">
                 <div className="dept-card-icon">
                   <div className="dept-card-icon-inner" />
                 </div>
-                <span className="dept-card-abbr">{abbr}</span>
+                <span className="dept-card-abbr">{c.college_name}</span>
               </div>
-              <p className="dept-card-name">{data.full}</p>
               <div className="dept-card-stats">
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Students</span>
-                  <span className="dept-card-stat-value">{allStudents[abbr].length.toLocaleString()}</span>
+                  <span className="dept-card-stat-value">{(c.students_count ?? 0).toLocaleString()}</span>
                 </div>
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Credentials</span>
                   <span className="dept-card-stat-value">
-                    {allStudents[abbr].reduce((s, st) => s + st.documents, 0).toLocaleString()}
+                    {(c.documents_count ?? 0).toLocaleString()}
                   </span>
                 </div>
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Completion</span>
-                  <span className="dept-card-stat-value-gold">{data.completion}%</span>
+                  <span className="dept-card-stat-value-gold">{c.completion ?? 0}%</span>
                 </div>
               </div>
               <div className="dept-progress-bar-bg">
-                <div className="dept-progress-bar-fill" style={{ width: `${data.completion}%` }} />
+                <div className="dept-progress-bar-fill" style={{ width: `${c.completion ?? 0}%` }} />
               </div>
             </div>
           ))}
@@ -151,8 +128,6 @@ export default function Departments({ onViewStudent }) {
   }
 
   // ── BREAKDOWN ──
-  const dept = departmentData[selectedDept];
-
   return (
     <>
       {/* Back */}
@@ -163,8 +138,8 @@ export default function Departments({ onViewStudent }) {
       {/* Header */}
       <div className="dept-breakdown-header">
         <div>
-          <h2 className="dept-breakdown-abbr">{selectedDept}</h2>
-          <p className="dept-breakdown-name">{dept.full}</p>
+          <h2 className="dept-breakdown-abbr">{dept?.college_name}</h2>
+          <p className="dept-breakdown-name">{dept?.full_name ?? dept?.college_name}</p>
         </div>
         <div className="dept-progress-bar-bg" style={{ width: "200px" }}>
           <div className="dept-progress-bar-fill" style={{ width: `${completionRate}%` }} />
@@ -205,57 +180,56 @@ export default function Departments({ onViewStudent }) {
           onChange={e => setFilterCourse(e.target.value)}
         >
           <option value="">All Courses</option>
-          {dept.courses.map(c => (
-            <option key={c} value={c}>{c}</option>
+          {dept?.programs?.map(p => (
+            <option key={p.program_id} value={p.program_name}>{p.program_name}</option>
           ))}
         </select>
       </div>
 
       {/* Table */}
-{/* Table */}
-<div className="dept-table-wrapper">
-  <table className="dept-table">
-    <thead>
-      <tr className="dept-thead">
-        <th className="dept-th-first">Student ID</th>
-        <th className="dept-th">Full Name</th>
-        <th className="dept-th">Course</th>
-        <th className="dept-th">Year Level</th>
-        <th className="dept-th">Credential Completion</th>
-      </tr>
-    </thead>
-    <tbody>
-      {filtered.length === 0 ? (
-        <tr>
-          <td colSpan={5} className="dept-empty">No students found.</td>
-        </tr>
-      ) : (
-        filtered.map((s, i) => {
-          const pct = Math.round((s.documents / 8) * 100);
-          return (
-            <tr key={s.id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
-              <td className="dept-td-first">{s.id}</td>
-              <td className="dept-td-name">{s.name}</td>
-              <td className="dept-td">{s.course}</td>
-              <td className="dept-td">{s.year}</td>
-              <td className="dept-td">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-1.5 bg-[#e6a817] rounded-full"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-bold text-gray-500 w-8 text-right">{pct}%</span>
-                </div>
-              </td>
+      <div className="dept-table-wrapper">
+        <table className="dept-table">
+          <thead>
+            <tr className="dept-thead">
+              <th className="dept-th-first">Student ID</th>
+              <th className="dept-th">Full Name</th>
+              <th className="dept-th">Course</th>
+              <th className="dept-th">Year Level</th>
+              <th className="dept-th">Credential Completion</th>
             </tr>
-          );
-        })
-      )}
-    </tbody>
-  </table>
-</div>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="dept-empty">No students found.</td>
+              </tr>
+            ) : (
+              filtered.map((s, i) => {
+                const pct = Math.round((s.documents / 8) * 100);
+                return (
+                  <tr key={s.student_id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
+                    <td className="dept-td-first">{s.student_id}</td>
+                    <td className="dept-td-name">{s.first_name} {s.last_name}</td>
+                    <td className="dept-td">{s.course}</td>
+                    <td className="dept-td">{s.year}</td>
+                    <td className="dept-td">
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-1.5 bg-[#e6a817] rounded-full"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold text-gray-500 w-8 text-right">{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

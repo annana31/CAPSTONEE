@@ -5,7 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\OcrController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\ReportsController;
-
+use App\Http\Controllers\Api\DepartmentController;
 
 Route::post('/ocr/extract', [OcrController::class, 'extract']);
 /*
@@ -50,3 +50,7 @@ Route::apiResource('staff', StaffController::class)->only([
  
 Route::post('staff/{staff}/login',  [StaffController::class, 'setActive']);
 Route::post('staff/{staff}/logout', [StaffController::class, 'setInactive']);
+
+
+    Route::get('/colleges', [DepartmentController::class, 'index']);
+    Route::get('/colleges/{collegeId}/students', [DepartmentController::class, 'students']);
