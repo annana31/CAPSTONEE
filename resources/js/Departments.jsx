@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import "./styles/Departments.css";
 
 const departmentData = {
@@ -44,6 +44,8 @@ const departmentData = {
   },
 };
 
+const DEPT_CODES = Object.keys(departmentData);
+
 // Generate mock students per department
 const generateStudents = (dept) => {
   const courses = departmentData[dept].courses;
@@ -75,10 +77,69 @@ const statusClass = (status) => {
   }
 };
 
+// =====================================================
+// URL HELPERS
+// Departments now has its own real Laravel route,
+// /departments/{dept_code}, so this component manages its own
+// sub-path directly (App.js only knows you're on the
+// "Departments" page as a whole — which specific department is
+// open is this component's concern). On refresh, reading the
+// dept code straight out of window.location.pathname restores
+// the correct breakdown view instead of resetting to the
+// overview grid.
+// =====================================================
+const getDeptFromPath = () => {
+  try {
+    const parts = window.location.pathname
+      .replace(/^\/+|\/+$/g, "")
+      .split("/")
+      .filter(Boolean);
+
+    if (parts[0] === "departments" && parts[1]) {
+      const code = parts[1].toUpperCase();
+      if (DEPT_CODES.includes(code)) {
+        return code;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to read department from URL:", error);
+  }
+
+  return null;
+};
+
 export default function Departments({ onViewStudent }) {
-  const [selectedDept, setSelectedDept] = useState(null);
+  const [selectedDept, setSelectedDeptState] = useState(() => getDeptFromPath());
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
+
+  // ── Wrapper that keeps the URL in sync with the selected dept ──
+  const setSelectedDept = (dept) => {
+    setSelectedDeptState(dept);
+
+    try {
+      const nextPath = dept ? `/departments/${dept}` : "/departments";
+
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({ dept }, "", nextPath);
+      }
+    } catch (error) {
+      console.error("Failed to update department URL:", error);
+    }
+  };
+
+  // ── Keep state in sync when the user uses browser back/forward ──
+  useEffect(() => {
+    const handlePopState = () => {
+      setSelectedDeptState(getDeptFromPath());
+    };
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
 
   const students = selectedDept ? allStudents[selectedDept] : [];
 
@@ -217,50 +278,49 @@ export default function Departments({ onViewStudent }) {
       </div>
 
       {/* Table */}
-{/* Table */}
-<div className="dept-table-wrapper">
-  <table className="dept-table">
-    <thead>
-      <tr className="dept-thead">
-        <th className="dept-th-first">Student ID</th>
-        <th className="dept-th">Full Name</th>
-        <th className="dept-th">Course</th>
-        <th className="dept-th">Year Level</th>
-        <th className="dept-th">Credential Completion</th>
-      </tr>
-    </thead>
-    <tbody>
-      {filtered.length === 0 ? (
-        <tr>
-          <td colSpan={5} className="dept-empty">No students found.</td>
-        </tr>
-      ) : (
-        filtered.map((s, i) => {
-          const pct = Math.round((s.documents / 8) * 100);
-          return (
-            <tr key={s.id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
-              <td className="dept-td-first">{s.id}</td>
-              <td className="dept-td-name">{s.name}</td>
-              <td className="dept-td">{s.course}</td>
-              <td className="dept-td">{s.year}</td>
-              <td className="dept-td">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-1.5 bg-[#e6a817] rounded-full"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-bold text-gray-500 w-8 text-right">{pct}%</span>
-                </div>
-              </td>
+      <div className="dept-table-wrapper">
+        <table className="dept-table">
+          <thead>
+            <tr className="dept-thead">
+              <th className="dept-th-first">Student ID</th>
+              <th className="dept-th">Full Name</th>
+              <th className="dept-th">Course</th>
+              <th className="dept-th">Year Level</th>
+              <th className="dept-th">Credential Completion</th>
             </tr>
-          );
-        })
-      )}
-    </tbody>
-  </table>
-</div>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="dept-empty">No students found.</td>
+              </tr>
+            ) : (
+              filtered.map((s, i) => {
+                const pct = Math.round((s.documents / 8) * 100);
+                return (
+                  <tr key={s.id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
+                    <td className="dept-td-first">{s.id}</td>
+                    <td className="dept-td-name">{s.name}</td>
+                    <td className="dept-td">{s.course}</td>
+                    <td className="dept-td">{s.year}</td>
+                    <td className="dept-td">
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-1.5 bg-[#e6a817] rounded-full"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold text-gray-500 w-8 text-right">{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

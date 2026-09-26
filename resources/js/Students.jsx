@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-import StudentProfile from "./StudentProfile";
 import "./styles/Students.css";
 
 const yearLevels = [
@@ -68,7 +67,12 @@ const tdStyle = { ...tdBase, color: GREY };
 const tdIdStyle = { ...tdBase, color: NAVY, fontWeight: 700, paddingLeft: "32px" };
 const tdNameStyle = { ...tdBase, color: "#141446", fontWeight: 700 };
 
-export default function Students({ onAddStudent }) {
+// NOTE: this component no longer keeps its own "which student is
+// selected" state or renders StudentProfile itself. Navigating to a
+// student profile is now entirely App.js's responsibility (via the
+// onViewStudent prop), so the URL/activePage logic in App.js is
+// actually in the loop this time.
+export default function Students({ onAddStudent, onViewStudent }) {
   const [students, setStudents] = useState([]);
   const [colleges, setColleges] = useState([]);
   const [programs, setPrograms] = useState([]);
@@ -81,10 +85,15 @@ export default function Students({ onAddStudent }) {
   const [filterProgram, setFilterProgram] = useState("");
   const [filterYear, setFilterYear] = useState("");
 
-  const [selectedStudentId, setSelectedStudentId] = useState(null);
-
   // ============================================================
   // LOAD STUDENTS, COLLEGES AND PROGRAMS FROM SUPABASE
+  // Runs once when this component mounts. Since App.js unmounts
+  // Students and mounts StudentProfile instead when viewing a
+  // profile (rather than Students rendering StudentProfile inline
+  // as before), coming back to "Students" remounts this component
+  // fresh, which naturally reloads the list — same effect as the
+  // old selectedStudentId-based reload, without needing local
+  // navigation state.
   // ============================================================
 
   useEffect(() => {
@@ -114,9 +123,8 @@ export default function Students({ onAddStudent }) {
       }
     };
 
-    // Reload whenever we come back from a profile so edits show in the list
-    if (selectedStudentId === null) load();
-  }, [selectedStudentId]);
+    load();
+  }, []);
 
   // ============================================================
   // HELPERS
@@ -165,19 +173,6 @@ export default function Students({ onAddStudent }) {
 
     return matchSearch && matchCollege && matchProgram && matchYear;
   });
-
-  // ============================================================
-  // OPEN PROFILE PAGE
-  // ============================================================
-
-  if (selectedStudentId !== null) {
-    return (
-      <StudentProfile
-        studentId={selectedStudentId}
-        onBack={() => setSelectedStudentId(null)}
-      />
-    );
-  }
 
   // ============================================================
   // LIST
@@ -306,7 +301,9 @@ export default function Students({ onAddStudent }) {
                   <td style={tdBase}>
                     <button
                       className="students-view-btn"
-                      onClick={() => setSelectedStudentId(student.student_id)}
+                      onClick={() =>
+                        onViewStudent && onViewStudent(student.student_id)
+                      }
                     >
                       View
                     </button>

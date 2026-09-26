@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import axios from "axios";
 
 const requestTypes = [
@@ -47,55 +47,152 @@ const yearLevelMap = {
   1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year",
 };
 
+// ── Persistence keys ──────────────────────────────────────────────
+// StudentPreview has no Laravel route of its own (it's only reached
+// via App.js's studentMode flag, not a URL path), so localStorage is
+// the right place to persist its in-progress state across a refresh.
+const STORAGE_KEYS = {
+  studentId: "regisscan_preview_student_id",
+  showForm: "regisscan_preview_show_form",
+  step: "regisscan_preview_step",
+  preForm: "regisscan_preview_pre_form",
+  formStudentId: "regisscan_preview_form_student_id",
+  requestType: "regisscan_preview_request_type",
+  cavChoice: "regisscan_preview_cav_choice",
+  cavOther: "regisscan_preview_cav_other",
+  certChoice: "regisscan_preview_cert_choice",
+  certOther: "regisscan_preview_cert_other",
+  subjectSem: "regisscan_preview_subject_sem",
+  subjectSY1: "regisscan_preview_subject_sy1",
+  subjectSY2: "regisscan_preview_subject_sy2",
+  purpose: "regisscan_preview_purpose",
+};
+
+const readString = (key, fallback = "") => {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch (error) {
+    console.error(`Failed to restore ${key}:`, error);
+    return fallback;
+  }
+};
+
+const readBool = (key, fallback = false) => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return raw === "true";
+  } catch (error) {
+    console.error(`Failed to restore ${key}:`, error);
+    return fallback;
+  }
+};
+
+const readJson = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(`Failed to restore ${key}:`, error);
+    return fallback;
+  }
+};
+
+const writeValue = (key, value) => {
+  try {
+    if (value === null || value === undefined || value === "") {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(
+        key,
+        typeof value === "string" ? value : JSON.stringify(value)
+      );
+    }
+  } catch (error) {
+    console.error(`Failed to save ${key}:`, error);
+  }
+};
+
+const defaultPreForm = {
+  contactNumber: "",
+  isGraduate: null,
+  graduateYear: "",
+  lastSem: "",
+  lastSY1: "",
+  lastSY2: "",
+  requestedBefore: null,
+  previousCredential: "",
+  previousRequestDate: "",
+  isCleared: null,
+};
+
 export default function StudentPreview({ onBack }) {
-  // ── Search state (backend-driven, unchanged) ─────────────────
-  const [studentId, setStudentId] = useState("");
-  const [requests,  setRequests]  = useState([]);
-  const [showForm,  setShowForm]  = useState(false);
+  // ── Search state (backend-driven, now persisted) ──────────────
+  const [studentId, setStudentId] = useState(() =>
+    readString(STORAGE_KEYS.studentId)
+  );
+  const [requests, setRequests] = useState([]);
+  const [showForm, setShowForm] = useState(() =>
+    readBool(STORAGE_KEYS.showForm)
+  );
 
-  // ── New: two-step flow ────────────────────────────────────────
-  const [step, setStep] = useState("pre"); // "pre" | "main"
+  // ── Two-step flow (now persisted) ─────────────────────────────
+  const [step, setStep] = useState(() =>
+    readString(STORAGE_KEYS.step, "pre")
+  ); // "pre" | "main"
 
-  // ── New: Pre-form state + validation ──────────────────────────
-  const [preForm, setPreForm] = useState({
-    contactNumber: "",
-    isGraduate: null,
-    graduateYear: "",
-    lastSem: "",
-    lastSY1: "",
-    lastSY2: "",
-    requestedBefore: null,
-    previousCredential: "",
-    previousRequestDate: "",
-    isCleared: null,
-  });
+  // ── Pre-form state + validation (now persisted) ───────────────
+  const [preForm, setPreForm] = useState(() =>
+    readJson(STORAGE_KEYS.preForm, defaultPreForm)
+  );
   const [preErrors, setPreErrors] = useState({});
 
-  // ── Main form state (backend-driven, unchanged) ──────────────
-  const [formStudentId, setFormStudentId] = useState("");
-  const [fullName,      setFullName]      = useState("");
-  const [email,         setEmail]         = useState("");
-  const [course,        setCourse]        = useState("");
-  const [yearLevel,     setYearLevel]     = useState("");
-  const [purpose,       setPurpose]       = useState("");
-  const [studentFound,  setStudentFound]  = useState(false);
+  // ── Main form state (backend-driven, now persisted) ───────────
+  const [formStudentId, setFormStudentId] = useState(() =>
+    readString(STORAGE_KEYS.formStudentId)
+  );
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [course, setCourse] = useState("");
+  const [yearLevel, setYearLevel] = useState("");
+  const [purpose, setPurpose] = useState(() =>
+    readString(STORAGE_KEYS.purpose)
+  );
+  const [studentFound, setStudentFound] = useState(false);
 
-  const [requestType, setRequestType] = useState("CAV Certification");
-  const [cavChoice,   setCavChoice]   = useState("");
-  const [cavOther,    setCavOther]    = useState("");
-  const [certChoice,  setCertChoice]  = useState("");
-  const [certOther,   setCertOther]   = useState("");
-  const [subjectSem,  setSubjectSem]  = useState("");
-  const [subjectSY1,  setSubjectSY1]  = useState("");
-  const [subjectSY2,  setSubjectSY2]  = useState("");
+  const [requestType, setRequestType] = useState(() =>
+    readString(STORAGE_KEYS.requestType, "CAV Certification")
+  );
+  const [cavChoice, setCavChoice] = useState(() =>
+    readString(STORAGE_KEYS.cavChoice)
+  );
+  const [cavOther, setCavOther] = useState(() =>
+    readString(STORAGE_KEYS.cavOther)
+  );
+  const [certChoice, setCertChoice] = useState(() =>
+    readString(STORAGE_KEYS.certChoice)
+  );
+  const [certOther, setCertOther] = useState(() =>
+    readString(STORAGE_KEYS.certOther)
+  );
+  const [subjectSem, setSubjectSem] = useState(() =>
+    readString(STORAGE_KEYS.subjectSem)
+  );
+  const [subjectSY1, setSubjectSY1] = useState(() =>
+    readString(STORAGE_KEYS.subjectSY1)
+  );
+  const [subjectSY2, setSubjectSY2] = useState(() =>
+    readString(STORAGE_KEYS.subjectSY2)
+  );
 
-  // ── New: validation errors for the main form ─────────────────
+  // ── Validation errors for the main form ───────────────────────
   const [mainErrors, setMainErrors] = useState({});
 
-  const [submitting,      setSubmitting]      = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [fetchingStudent, setFetchingStudent] = useState(false);
 
-  // ── Style helpers (merged: validation-aware + read-only) ─────
+  // ── Style helpers (unchanged) ─────────────────────────────────
   const inputClass = (hasError) =>
     `border ${hasError ? "border-red-400 bg-red-50" : "border-gray-300"} p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full`;
   const readOnlyClass = "border border-gray-200 p-3 rounded-lg text-sm w-full bg-gray-50 text-gray-500 cursor-not-allowed";
@@ -109,7 +206,88 @@ export default function StudentPreview({ onBack }) {
     ? <p className="text-xs text-red-500 mt-1 font-semibold">This field is required.</p>
     : null;
 
-  // ── Pre-form helpers (new) ────────────────────────────────────
+  // ============================================================
+  // RESTORE ON MOUNT: if a Student ID was searched, or a form
+  // Student ID had already been looked up, re-run those so the
+  // screen looks the same as before the refresh instead of just
+  // restoring empty inputs.
+  // ============================================================
+
+  useEffect(() => {
+    if (studentId.trim()) {
+      searchRequest(studentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (formStudentId.trim()) {
+      fetchStudent(formStudentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ============================================================
+  // PERSIST STATE AS IT CHANGES
+  // ============================================================
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.studentId, studentId);
+  }, [studentId]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.showForm, showForm ? "true" : "false");
+  }, [showForm]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.step, step);
+  }, [step]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.preForm, preForm);
+  }, [preForm]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.formStudentId, formStudentId);
+  }, [formStudentId]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.requestType, requestType);
+  }, [requestType]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.cavChoice, cavChoice);
+  }, [cavChoice]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.cavOther, cavOther);
+  }, [cavOther]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.certChoice, certChoice);
+  }, [certChoice]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.certOther, certOther);
+  }, [certOther]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.subjectSem, subjectSem);
+  }, [subjectSem]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.subjectSY1, subjectSY1);
+  }, [subjectSY1]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.subjectSY2, subjectSY2);
+  }, [subjectSY2]);
+
+  useEffect(() => {
+    writeValue(STORAGE_KEYS.purpose, purpose);
+  }, [purpose]);
+
+  // ── Pre-form helpers (unchanged) ──────────────────────────────
   const handlePreFormChange = (field, value) => {
     setPreForm(prev => ({ ...prev, [field]: value }));
     setPreErrors(prev => ({ ...prev, [field]: false }));
@@ -137,7 +315,7 @@ export default function StudentPreview({ onBack }) {
     setStep("main");
   };
 
-  // ── Reset (extended to include pre-form + step) ──────────────
+  // ── Reset (also clears persisted state) ───────────────────────
   const resetForm = () => {
     setFormStudentId(""); setFullName(""); setEmail("");
     setCourse(""); setYearLevel(""); setPurpose("");
@@ -147,23 +325,12 @@ export default function StudentPreview({ onBack }) {
     setCertChoice(""); setCertOther("");
     setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
     setMainErrors({});
-    setPreForm({
-      contactNumber: "",
-      isGraduate: null,
-      graduateYear: "",
-      lastSem: "",
-      lastSY1: "",
-      lastSY2: "",
-      requestedBefore: null,
-      previousCredential: "",
-      previousRequestDate: "",
-      isCleared: null,
-    });
+    setPreForm(defaultPreForm);
     setPreErrors({});
     setStep("pre");
   };
 
-  // ── Fetch student info (backend, unchanged) ──────────────────
+  // ── Fetch student info (backend, unchanged) ───────────────────
   const fetchStudent = async (id) => {
     if (!id.trim()) return;
     setFetchingStudent(true);
@@ -179,25 +346,29 @@ export default function StudentPreview({ onBack }) {
     } catch {
       setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
       setStudentFound(false);
-      alert("Student not found. Please check the Student ID.");
+      // Don't alert here — this also runs silently on mount to
+      // restore a previous lookup, and a stale/invalid ID from a
+      // past session shouldn't pop an alert on every refresh.
     } finally {
       setFetchingStudent(false);
     }
   };
 
-  // ── Search requests (backend, unchanged) ─────────────────────
-  const searchRequest = async () => {
-    if (!studentId.trim()) return;
+  // ── Search requests (backend, unchanged) ──────────────────────
+  const searchRequest = async (idOverride) => {
+    const id = (idOverride ?? studentId).trim();
+    if (!id) return;
     try {
-      const res = await axios.get(`/api/request/student/${studentId}`);
+      const res = await axios.get(`/api/request/student/${id}`);
       setRequests(res.data);
     } catch (error) {
       console.error(error.response?.data ?? error.message);
-      alert("Could not fetch requests. Check your Student ID.");
+      // Same reasoning as fetchStudent: this can run silently on
+      // mount, so avoid alerting on a restore.
     }
   };
 
-  // ── New: validation for the main request form ────────────────
+  // ── Validation for the main request form (unchanged) ──────────
   const validateMainForm = () => {
     const e = {};
     if (!formStudentId.trim()) e.studentId = true;
@@ -307,21 +478,21 @@ export default function StudentPreview({ onBack }) {
               className="flex-1 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm"
             />
             <button
-              onClick={searchRequest}
+              onClick={() => searchRequest()}
               className="bg-[#0A2342] text-white px-6 py-3 rounded-xl font-semibold hover:bg-[#0d2e57] transition"
             >
               Search
             </button>
           </div>
           <button
-            onClick={() => { setShowForm(!showForm); setStep("pre"); }}
+            onClick={() => setShowForm(!showForm)}
             className="mt-4 text-[#D4A017] font-semibold text-sm hover:underline"
           >
             {showForm ? "— Hide Form" : "+ Submit Request"}
           </button>
         </div>
 
-        {/* ── PRE-FORM (new) ── */}
+        {/* ── PRE-FORM ── */}
         {showForm && step === "pre" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <h2 className="text-xl font-black text-[#0A2342] mb-1 tracking-tight">Before You Proceed</h2>
@@ -520,7 +691,7 @@ export default function StudentPreview({ onBack }) {
           </div>
         )}
 
-        {/* ── MAIN REQUEST FORM (backend calls unchanged, validation UI added) ── */}
+        {/* ── MAIN REQUEST FORM ── */}
         {showForm && step === "main" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <button onClick={() => setStep("pre")} className="mb-5 text-sm font-semibold text-[#0A2342] hover:text-[#D4A017] transition">
