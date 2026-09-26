@@ -18,7 +18,7 @@ class Staff extends Model
         'status',     // 'Active' when logged in, 'Inactive' on logout
     ];
 
-    protected $hidden = ['password'];
+    protected $hidden = ['password', 'api_token', 'api_token_expires_at']; // RBAC: never expose token columns
 
     public function getStaffCodeAttribute(): string
     {

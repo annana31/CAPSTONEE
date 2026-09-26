@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import "./styles/StaffAccounts.css";
+import { authHeaders } from "./rbac"; // RBAC
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -29,7 +30,8 @@ export default function StaffAccounts() {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`${API_BASE}/staff`);
+      const res = await fetch(`${API_BASE}/staff`, { headers: authHeaders() }); // RBAC
+      if (res.status === 401 || res.status === 403) throw new Error("Not authorized. Please log out and log in again."); // RBAC
       if (!res.ok) throw new Error("Couldn't load staff from the server.");
       const json = await res.json();
       setStaff(json.data);
@@ -96,7 +98,7 @@ export default function StaffAccounts() {
 
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json", Accept: "application/json" }), // RBAC
         body: JSON.stringify(form),
       });
 
@@ -120,7 +122,7 @@ export default function StaffAccounts() {
   // ── Delete ───────────────────────────────────────────────────────────
   async function confirmDelete() {
     try {
-      const res = await fetch(`${API_BASE}/staff/${deleteTarget.id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/staff/${deleteTarget.id}`, { method: "DELETE", headers: authHeaders() }); // RBAC
       if (!res.ok) throw new Error("Couldn't delete staff.");
       await loadStaff();
       setDeleteTarget(null);

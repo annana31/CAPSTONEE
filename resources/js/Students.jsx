@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
+import { useAuth } from "./AuthContext"; // RBAC
+import { authHeaders, PERMISSIONS } from "./rbac"; // RBAC
 
 const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
 const intToYearLevel = { 1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year" };
@@ -19,6 +21,7 @@ const extractNameFromFile = async (file) => {
 
   const response = await fetch("http://127.0.0.1:8000/api/ocr/extract", {
     method: "POST",
+    headers: authHeaders(), // RBAC (do NOT set Content-Type here; the browser sets it for FormData)
     body: formData,
   });
 
@@ -38,6 +41,7 @@ const extractNameFromFile = async (file) => {
 };
 
 export default function Students() {
+  const { can } = useAuth(); // RBAC
   const [students, setStudents] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [coursesByDept, setCoursesByDept] = useState({});
@@ -181,6 +185,7 @@ export default function Students() {
 
   // ── BACKEND: Insert new student ──
   const handleSubmit = async () => {
+    if (!can(PERMISSIONS.STUDENTS_CREATE)) return; // RBAC
     if (!form.id || !form.department || !form.course || !form.first_name || !form.last_name) return;
     setSubmitting(true);
     try {
@@ -219,9 +224,11 @@ export default function Students() {
       {/* Header */}
       <div className="students-header">
         <h2 className="students-title">Student Records</h2>
-        <button className="students-add-btn" onClick={() => setShowModal(true)}>
-          Add Student
-        </button>
+        {can(PERMISSIONS.STUDENTS_CREATE) && ( // RBAC: only roles allowed to add students
+          <button className="students-add-btn" onClick={() => setShowModal(true)}>
+            Add Student
+          </button>
+        )}
       </div>
 
       {/* Filter Bar */}

@@ -6,8 +6,9 @@ use App\Http\Controllers\OcrController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\ReportsController;
 use App\Http\Controllers\Api\DepartmentController;
+use App\Http\Controllers\Api\AuthController; // RBAC
+use App\Http\Controllers\RequestController;
 
-Route::post('/ocr/extract', [OcrController::class, 'extract']);
 /*
 |--------------------------------------------------------------------------
 | API Routes
@@ -19,14 +20,18 @@ Route::post('/ocr/extract', [OcrController::class, 'extract']);
 |
 */
 
+// ── RBAC: login issues a token (public, rate-limited) ──
+Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+
+// ── RBAC: OCR is for Registrar Staff only ──
+Route::post('/ocr/extract', [OcrController::class, 'extract'])
+    ->middleware(['auth.staff', 'role:Registrar Staff']);
+
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
 
 // STUDENT REQUEST
-use App\Http\Controllers\RequestController;
-
-
 Route::get('/request/student/{student_id}', [RequestController::class, 'getByStudent']);
 Route::post('/request', [RequestController::class, 'store']);
 
@@ -41,16 +46,29 @@ Route::get('/student/{id}', function ($id) {
 
     return response()->json($student);
 });
- 
-Route::get('reports', [ReportsController::class, 'index']);
 
-Route::apiResource('staff', StaffController::class)->only([
-    'index', 'store', 'update', 'destroy',
-]);
- 
-Route::post('staff/{staff}/login',  [StaffController::class, 'setActive']);
-Route::post('staff/{staff}/logout', [StaffController::class, 'setInactive']);
+// ── RBAC: any logged-in staff (token required) ──
+Route::middleware('auth.staff')->group(function () {
+    Route::get('/auth/me',      [AuthController::class, 'me']);
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
+});
 
-
+// ── RBAC: REGISTRAR STAFF ONLY — departments/colleges ──
+Route::middleware(['auth.staff', 'role:Registrar Staff'])->group(function () {
     Route::get('/colleges', [DepartmentController::class, 'index']);
     Route::get('/colleges/{collegeId}/students', [DepartmentController::class, 'students']);
+});
+
+Route::middleware(['auth.staff', 'role:Admin'])->group(function () {
+
+    Route::get('reports', [ReportsController::class, 'index']);
+
+    Route::apiResource('staff', StaffController::class)->only([
+        'index', 'store', 'update', 'destroy',
+    ]);
+});
+
+// These fire during any staff member's own login/logout (Admin or Registrar),
+// before an RBAC token even exists yet — so they stay public, same as before RBAC.
+Route::post('staff/{staff}/login',  [StaffController::class, 'setActive']);
+Route::post('staff/{staff}/logout', [StaffController::class, 'setInactive']);

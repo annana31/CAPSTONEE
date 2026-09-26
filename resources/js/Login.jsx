@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./styles/Login.css";
 import { supabase } from "./supabaseClient";
+import { normalizeRole, requestApiToken, setAuthToken } from "./rbac"; // RBAC
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -42,6 +43,13 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
+      // RBAC: block accounts with an unknown / missing role
+      if (!normalizeRole(data.user_role)) {
+        setError("Your account role is not recognized. Please contact the administrator.");
+        setLoading(false);
+        return;
+      }
+
       // Set status to Active on successful login.
       // Routed through Laravel (service role) instead of the anon key,
       // since tbl_staff has RLS enabled with no anon write policy.
@@ -66,6 +74,11 @@ export default function Login({ onLogin, onStudentAccess }) {
           date_time:            new Date().toISOString(),
           status:               "success",
         });
+
+      // RBAC: get an API token so Laravel can enforce roles on the server
+      const apiToken = await requestApiToken(inputUsername, inputPassword);
+      if (apiToken) setAuthToken(apiToken);
+      else console.warn("RBAC: could not get an API token from the backend.");
 
       // Pass staff_id as a NUMBER to App.jsx
       onLogin(data.username, data.user_role, Number(data.staff_id));

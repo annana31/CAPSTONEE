@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
+import { useAuth } from "./AuthContext"; // RBAC
 import "./styles/Dashboard.css";
 
 const ROWS_PER_PAGE = 10;
@@ -18,6 +19,7 @@ const badgeClass = (type) => {
 export default function Dashboard({ staffName, activePage, setActivePage, onLogout, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const { canAccess } = useAuth(); // RBAC
 
   // ── BACKEND STATE ──
   const [stats, setStats] = useState([
@@ -134,7 +136,8 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
     return activityLog.slice(start, start + ROWS_PER_PAGE);
   }, [activityLog, currentPage]);
 
-  const navItems = ["Dashboard", "Students", "Departments", "Requests"];
+  // RBAC: only show the menu items this role may open
+  const navItems = ["Dashboard", "Students", "Departments", "Requests"].filter((item) => canAccess(item));
 
   return (
     <div className="dash-layout">

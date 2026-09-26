@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import "./styles/Departments.css";
+import { authHeaders } from "./rbac"; // RBAC
 
 const API_BASE = "http://127.0.0.1:8000/api"; 
 
@@ -22,11 +23,8 @@ export default function Departments({ onViewStudent }) {
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 10;
 
-  const token = localStorage.getItem("token");
-  const authHeaders = { Authorization: `Bearer ${token}` };
-
   useEffect(() => {
-    fetch(`${API_BASE}/colleges`, { headers: authHeaders })
+    fetch(`${API_BASE}/colleges`, { headers: authHeaders() }) // RBAC
       .then(res => res.json())
       .then(data => setColleges(data))
       .catch(err => console.error("Failed to load colleges:", err))
@@ -35,7 +33,7 @@ export default function Departments({ onViewStudent }) {
 
   useEffect(() => {
     if (!selectedDept) return;
-    fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders })
+    fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders() }) // RBAC
       .then(res => res.json())
       .then(data => setStudents(data))
       .catch(err => console.error("Failed to load students:", err));

@@ -11,6 +11,9 @@ import StaffAccounts from "./StaffAccounts";
 import SystemReports from "./SystemReports";
 import AuditLogs from "./AuditLogs";
 import { supabase } from "./supabaseClient";
+// ── RBAC ──
+import { AuthProvider, ProtectedPage } from "./AuthContext";
+import { normalizeRole, canAccessPage, getDefaultPage, clearAuthToken, revokeApiToken } from "./rbac";
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -20,9 +23,17 @@ export default function App() {
   const [studentMode, setStudentMode] = useState(false);
   const [staffName, setStaffName] = useState("");
   const [staffId, setStaffId] = useState(null);
+  const [userRole, setUserRole] = useState(null); // RBAC: canonical role ("Admin" | "Registrar Staff")
   const [activePage, setActivePage] = useState("Dashboard");
 
   const handleLogin = (name, role, id) => {
+    // RBAC: refuse accounts whose role is not one of the known roles
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole) {
+      alert("Your account role is not recognized. Please contact the administrator.");
+      return;
+    }
+    setUserRole(normalizedRole); // RBAC
     setIsAdmin(role?.toLowerCase() === "admin");
     setStaffName(name);
     setStaffId(Number(id)); // ensure it's always a number
@@ -31,6 +42,8 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    await revokeApiToken(); // RBAC: invalidate the API token on the server
+    clearAuthToken();       // RBAC: forget the token in this browser
     if (staffId) {
       // Set status to Inactive on logout.
       // Routed through Laravel (service role) instead of the anon key,
@@ -45,7 +58,14 @@ export default function App() {
     setIsAdmin(false);
     setStaffName("");
     setStaffId(null);
+    setUserRole(null); // RBAC
     setActivePage("Dashboard");
+  };
+
+  // ── RBAC: navigation guard — only pages this role may open ──
+  const navigate = (page) => {
+    if (canAccessPage(userRole, page)) setActivePage(page);
+    else setActivePage(getDefaultPage());
   };
 
   if (studentMode) {
@@ -72,14 +92,18 @@ export default function App() {
     };
 
     return (
-      <AdminDashboard
-        staffName={staffName}
-        onLogout={handleLogout}
-        activePage={activePage}
-        setActivePage={setActivePage}
-      >
-        {renderAdminPage()}
-      </AdminDashboard>
+      <AuthProvider role={userRole} staffId={staffId} staffName={staffName}>
+        <AdminDashboard
+          staffName={staffName}
+          onLogout={handleLogout}
+          activePage={activePage}
+          setActivePage={navigate}
+        >
+          <ProtectedPage page={activePage}>
+            {renderAdminPage()}
+          </ProtectedPage>
+        </AdminDashboard>
+      </AuthProvider>
     );
   }
 
@@ -94,13 +118,17 @@ export default function App() {
   };
 
   return (
-    <Dashboard
-      staffName={staffName}
-      activePage={activePage}
-      setActivePage={setActivePage}
-      onLogout={handleLogout}
-    >
-      {renderPage()}
-    </Dashboard>
+    <AuthProvider role={userRole} staffId={staffId} staffName={staffName}>
+      <Dashboard
+        staffName={staffName}
+        activePage={activePage}
+        setActivePage={navigate}
+        onLogout={handleLogout}
+      >
+        <ProtectedPage page={activePage}>
+          {renderPage()}
+        </ProtectedPage>
+      </Dashboard>
+    </AuthProvider>
   );
 }
