@@ -277,6 +277,56 @@ export default function StudentPreview({ onBack }) {
   // ── Render ────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-100 px-6 py-12">
+
+      {/* ── RESPONSIVE STYLES (added) ── */}
+      <style>{`
+        /* Phones (below 640px) */
+        @media (max-width: 639px) {
+          /* Page + card spacing */
+          .min-h-screen.px-6.py-12 { padding: 1.5rem 1rem; }
+          .rounded-2xl.p-8 { padding: 1.25rem; }
+          .rounded-2xl.p-6 { padding: 1rem; }
+          .rounded-2xl.p-5 { padding: 1rem; }
+          .section-fix, .bg-gray-50.rounded-xl.p-5 { padding: 1rem; }
+
+          /* Title */
+          h1.text-4xl { font-size: 1.75rem; line-height: 2.25rem; margin-bottom: 1.5rem; }
+
+          /* Stack the 3-column (Semester / S.Y. Start / S.Y. End) and 2-column pre-form grids */
+          .grid.grid-cols-3,
+          .grid.grid-cols-2 { grid-template-columns: 1fr; }
+
+          /* Search row and Student ID row: input on top, button/status below */
+          .flex.gap-3 { flex-direction: column; }
+          .flex.gap-3 > input { flex: none; width: 100%; }
+          .flex.gap-3 > button { width: 100%; }
+
+          /* Request cards: stack name/date above the status badge */
+          .flex.justify-between.items-center {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.75rem;
+          }
+
+          /* Full-width action buttons */
+          .justify-end > button,
+          button.mt-6 { width: 100%; }
+
+          /* Yes/No checkboxes wrap instead of overflowing */
+          .flex.items-center.gap-6 { flex-wrap: wrap; gap: 1rem; }
+        }
+
+        /* Tablets (640px to 1023px) */
+        @media (min-width: 640px) and (max-width: 1023px) {
+          .min-h-screen.px-6.py-12 { padding: 2rem 1.5rem; }
+          h1.text-4xl { font-size: 2.25rem; }
+        }
+
+        /* Prevent sideways scrolling on any device */
+        html, body { overflow-x: hidden; }
+        input, select, textarea { max-width: 100%; }
+      `}</style>
+
       <div className="max-w-4xl mx-auto">
 
         {/* Back */}
