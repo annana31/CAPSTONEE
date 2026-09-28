@@ -1,6 +1,9 @@
 import { useState } from "react";
 import "./styles/Login.css";
 import { supabase } from "./supabaseClient";
+import { normalizeRole, requestApiToken, setAuthToken } from "./rbac"; // RBAC
+
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 export default function Login({ onLogin, onStudentAccess }) {
   const [username, setUsername] = useState("");
@@ -40,13 +43,27 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
-      // Set status to Active on successful login
-      await supabase
-        .from("tbl_staff")
-        .update({ status: "Active" })
-        .eq("staff_id", data.staff_id);
+      // RBAC: block accounts with an unknown / missing role
+      if (!normalizeRole(data.user_role)) {
+        setError("Your account role is not recognized. Please contact the administrator.");
+        setLoading(false);
+        return;
+      }
 
-        // ── Record login activity so last_login shows in Staff Accounts ──
+      // Set status to Active on successful login.
+      // Routed through Laravel (service role) instead of the anon key,
+      // since tbl_staff has RLS enabled with no anon write policy.
+      try {
+        await fetch(`${API_BASE}/staff/${data.staff_id}/login`, { method: "POST" });
+      } catch (statusErr) {
+        // Non-fatal: login still proceeds even if the status ping fails,
+        // but log it so it's visible during testing.
+        console.error("Failed to set staff status to Active:", statusErr);
+      }
+
+      // ── Record login activity so last_login shows in Staff Accounts ──
+      // NOTE: this insert also goes through the anon key. If tbl_system_activity
+      // gets RLS enabled later, move this into the same Laravel /login endpoint too.
       await supabase
         .from("tbl_system_activity")
         .insert({
@@ -57,6 +74,11 @@ export default function Login({ onLogin, onStudentAccess }) {
           date_time:            new Date().toISOString(),
           status:               "success",
         });
+
+      // RBAC: get an API token so Laravel can enforce roles on the server
+      const apiToken = await requestApiToken(inputUsername, inputPassword);
+      if (apiToken) setAuthToken(apiToken);
+      else console.warn("RBAC: could not get an API token from the backend.");
 
       // Pass staff_id as a NUMBER to App.jsx
       onLogin(data.username, data.user_role, Number(data.staff_id));

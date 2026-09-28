@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/AdminDashboard.css";
+import { useAuth } from "./AuthContext"; // RBAC
 
 const navItems = ["Dashboard", "Staff Accounts", "System Reports", "Audit Logs"];
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -73,6 +74,8 @@ function DonutChart({ data, total }) {
 export default function AdminDashboard({ staffName = "Admin", onLogout, activePage, setActivePage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const { canAccess } = useAuth(); // RBAC
+  const visibleNavItems = navItems.filter((item) => canAccess(item)); // RBAC: only menu items this role may open
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [stats, setStats] = useState({
@@ -186,7 +189,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
         </div>
         <p className="admin-sidebar-section-label">Admin Panel</p>
         <nav className="admin-sidebar-nav">
-          {navItems.map(item => (
+          {visibleNavItems.map(item => (
             <button key={item} onClick={() => setActivePage(item)} className={activePage === item ? "admin-sidebar-nav-item-active" : "admin-sidebar-nav-item"}>
               {item}
             </button>

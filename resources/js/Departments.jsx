@@ -1,72 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import "./styles/Departments.css";
+import { authHeaders } from "./rbac"; // RBAC
 
-const departmentData = {
-  CEA: {
-    full: "College of Engineering & Architecture",
-    courses: ["BS Architecture", "BS Civil Engineering", "BS Mechanical Engineering", "BS Computer Engineering", "BS Geodetic Engineering", "BS Electrical Engineering", "BS Electronics Engineering", "Masters of Engineering Program", "Master of Science in Electrical Engineering", "Master of Science in Sustainable Development, Major in Urban Planning and Sustainable Development", "Professional Science Masters in Power Systems Engineering and Management", "Doctor of Philosophy in Energy Engineering"],
-    completion: 68,
-  },
-  CITC: {
-    full: "College of IT & Computing",
-    courses: ["BS Computer Science", "BS Data Science", "BS Information Technology", "BS Technology Communication Management"],
-    completion: 74,
-  },
-  CSM: {
-    full: "College of Science & Mathematics",
-    courses: ["BS Applied Mathematics", "BS Applied Physics", "BS Chemistry", "BS Environmental Science", "BS Food Technology", "Master of Science in Applied Mathematics", "Master of Science in Environmental Science and Technology – Major in Natural Science", "Doctor of Philosophy in Applied Mathematics"],
-    completion: 71,
-  },
-  CSTE: {
-    full: "College of Science & Technology Education",
-    courses: ["BS Education Major in Science", "BS Education Major in Mathematics", "BS Technology and Livelihood Education", "BS Technical-Vocational Teacher Education", "Master of Science in Mathematics Education", "Master of Science in Science Education (Chemistry)", "Master of Science in Science Education (Physics)", "Master of Arts in Teaching Special Education", "Master of Arts in Teaching English as a Second Language", "Master in Technical and Technology Education", "Doctor of Philosophy in Mathematics Education", "Doctor of Philosophy in Science Education Major in Chemistry", "Doctor of Technology Education"],
-    completion: 63,
-  },
-  COT: {
-    full: "College of Technology",
-    courses: ["BS Electronics Technology", "BS Autotronics", "BS Energy Systems and Management", "BS Electro-Mechanical Technology", "BS Manufacturing Engineering Technology"],
-    completion: 69,
-  },
-  COM: {
-    full: "College of Medicine",
-    courses: ["Doctor of Medicine"],
-    completion: 77,
-  },
-  CON: {
-    full: "College of Nursing",
-    courses: ["BS Nursing"],
-    completion: 75,
-  },
-  SHS: {
-    full: "Senior High School",
-    courses: ["STEM"],
-    completion: 82,
-  },
-};
-
-const DEPT_CODES = Object.keys(departmentData);
-
-// Generate mock students per department
-const generateStudents = (dept) => {
-  const courses = departmentData[dept].courses;
-  const statuses = ["Active", "Active", "Active", "LOA", "Graduated", "Inactive"];
-  const firstNames = ["Juan", "Maria", "Carlo", "Ana", "Leo", "Rosa", "Pio", "Sheila", "Mark", "Luz", "Jose", "Clara"];
-  const lastNames = ["dela Cruz", "Santos", "Reyes", "Villanueva", "Fernandez", "Lim", "Mangubat", "Gomez", "Uy", "Garcia", "Bautista", "Torres"];
-  const years = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
-
-  return Array.from({ length: 20 }, (_, i) => ({
-    id: `20${20 + (i % 5)}${Math.floor(100000 + Math.random() * 900000)}`.slice(0, 10),
-    name: `${firstNames[i % firstNames.length]} ${lastNames[(i + 3) % lastNames.length]}`,
-    course: courses[i % courses.length],
-    year: years[i % years.length],
-    status: statuses[i % statuses.length],
-    documents: Math.floor(3 + Math.random() * 5),
-  }));
-};
-
-const allStudents = Object.fromEntries(
-  Object.keys(departmentData).map(dept => [dept, generateStudents(dept)])
-);
+const API_BASE = "http://127.0.0.1:8000/api";
 
 const statusClass = (status) => {
   switch (status) {
@@ -79,16 +15,12 @@ const statusClass = (status) => {
 
 // =====================================================
 // URL HELPERS
-// Departments now has its own real Laravel route,
-// /departments/{dept_code}, so this component manages its own
-// sub-path directly (App.js only knows you're on the
-// "Departments" page as a whole — which specific department is
-// open is this component's concern). On refresh, reading the
-// dept code straight out of window.location.pathname restores
-// the correct breakdown view instead of resetting to the
-// overview grid.
+// Departments has its own Laravel route, /departments/{dept_code}.
+// This component manages its own sub-path. The code in the URL is
+// matched against college_name (e.g. "CITC"). Because colleges load
+// from the API, the match is resolved after the fetch completes.
 // =====================================================
-const getDeptFromPath = () => {
+const getDeptCodeFromPath = () => {
   try {
     const parts = window.location.pathname
       .replace(/^\/+|\/+$/g, "")
@@ -96,80 +28,132 @@ const getDeptFromPath = () => {
       .filter(Boolean);
 
     if (parts[0] === "departments" && parts[1]) {
-      const code = parts[1].toUpperCase();
-      if (DEPT_CODES.includes(code)) {
-        return code;
-      }
+      return decodeURIComponent(parts[1]).toUpperCase();
     }
   } catch (error) {
     console.error("Failed to read department from URL:", error);
   }
-
   return null;
 };
 
+const findCollegeByCode = (list, code) => {
+  if (!code) return null;
+  return list.find(c => String(c.college_name).toUpperCase() === code) ?? null;
+};
+
 export default function Departments({ onViewStudent }) {
-  const [selectedDept, setSelectedDeptState] = useState(() => getDeptFromPath());
+  const [colleges, setColleges] = useState([]);
+  const [selectedDept, setSelectedDeptState] = useState(null); // college_id
+  const [students, setStudents] = useState([]);
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 10;
 
   // ── Wrapper that keeps the URL in sync with the selected dept ──
-  const setSelectedDept = (dept) => {
-    setSelectedDeptState(dept);
+  const setSelectedDept = (collegeId) => {
+    setSelectedDeptState(collegeId);
 
     try {
-      const nextPath = dept ? `/departments/${dept}` : "/departments";
+      const college = colleges.find(c => c.college_id === collegeId);
+      const nextPath = college
+        ? `/departments/${encodeURIComponent(college.college_name)}`
+        : "/departments";
 
       if (window.location.pathname !== nextPath) {
-        window.history.pushState({ dept }, "", nextPath);
+        window.history.pushState({ dept: collegeId }, "", nextPath);
       }
     } catch (error) {
       console.error("Failed to update department URL:", error);
     }
   };
 
+  // ── Load colleges, then restore the selected dept from the URL ──
+  useEffect(() => {
+    fetch(`${API_BASE}/colleges`, { headers: authHeaders() }) // RBAC
+      .then(res => res.json())
+      .then(data => {
+        setColleges(data);
+        const match = findCollegeByCode(data, getDeptCodeFromPath());
+        setSelectedDeptState(match ? match.college_id : null);
+      })
+      .catch(err => console.error("Failed to load colleges:", err))
+      .finally(() => setLoading(false));
+  }, []);
+
   // ── Keep state in sync when the user uses browser back/forward ──
   useEffect(() => {
     const handlePopState = () => {
-      setSelectedDeptState(getDeptFromPath());
+      const match = findCollegeByCode(colleges, getDeptCodeFromPath());
+      setSelectedDeptState(match ? match.college_id : null);
     };
 
     window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [colleges]);
 
-    return () => {
-      window.removeEventListener("popstate", handlePopState);
-    };
-  }, []);
+  useEffect(() => {
+    if (!selectedDept) return;
+    fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders() }) // RBAC
+      .then(res => res.json())
+      .then(data => setStudents(data))
+      .catch(err => console.error("Failed to load students:", err));
+  }, [selectedDept]);
 
-  const students = selectedDept ? allStudents[selectedDept] : [];
+  const dept = colleges.find(c => c.college_id === selectedDept);
+
+  const enrichedStudents = useMemo(() => {
+    return students.map(s => ({
+      ...s,
+      course: dept?.programs?.find(p => p.program_id === s.program_id)?.program_name ?? "",
+      year: s.year_level,
+      documents: s.documents ?? 0, // real count from the API
+    }));
+  }, [students, dept]);
 
   const filtered = useMemo(() => {
-    return students.filter(s => {
-      const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) || s.id.includes(search);
+    return enrichedStudents.filter(s => {
+      const fullName = `${s.first_name} ${s.last_name}`.toLowerCase();
+      const matchSearch = fullName.includes(search.toLowerCase()) || String(s.student_id).includes(search);
       const matchCourse = filterCourse ? s.course === filterCourse : true;
       return matchSearch && matchCourse;
     });
-  }, [students, search, filterCourse]);
+  }, [enrichedStudents, search, filterCourse]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterCourse, selectedDept]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * rowsPerPage;
+    return filtered.slice(start, start + rowsPerPage);
+  }, [filtered, currentPage]);
 
   const totalStudents = filtered.length;
   const totalDocs = filtered.reduce((sum, s) => sum + s.documents, 0);
   const completionRate = selectedDept
     ? filterCourse
       ? Math.round(50 + (filterCourse.length % 30))
-      : departmentData[selectedDept].completion
+      : (dept?.completion ?? 0)
     : 0;
 
-  const handleDeptClick = (dept) => {
-    setSelectedDept(dept);
+  const handleDeptClick = (collegeId) => {
+    setSelectedDept(collegeId);
     setFilterCourse("");
     setSearch("");
+    setStudents([]); // avoid flashing the previous college's students
   };
 
   const handleBack = () => {
     setSelectedDept(null);
     setFilterCourse("");
     setSearch("");
+    setStudents([]);
   };
+
+  if (loading) return <p>Loading departments...</p>;
 
   // ── OVERVIEW ──
   if (!selectedDept) {
@@ -181,33 +165,32 @@ export default function Departments({ onViewStudent }) {
         </div>
 
         <div className="dept-grid">
-          {Object.entries(departmentData).map(([abbr, data]) => (
-            <div key={abbr} className="dept-card" onClick={() => handleDeptClick(abbr)}>
+          {colleges.map((c) => (
+            <div key={c.college_id} className="dept-card" onClick={() => handleDeptClick(c.college_id)}>
               <div className="dept-card-top">
                 <div className="dept-card-icon">
                   <div className="dept-card-icon-inner" />
                 </div>
-                <span className="dept-card-abbr">{abbr}</span>
+                <span className="dept-card-abbr">{c.college_name}</span>
               </div>
-              <p className="dept-card-name">{data.full}</p>
               <div className="dept-card-stats">
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Students</span>
-                  <span className="dept-card-stat-value">{allStudents[abbr].length.toLocaleString()}</span>
+                  <span className="dept-card-stat-value">{(c.students_count ?? 0).toLocaleString()}</span>
                 </div>
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Credentials</span>
                   <span className="dept-card-stat-value">
-                    {allStudents[abbr].reduce((s, st) => s + st.documents, 0).toLocaleString()}
+                    {(c.documents_count ?? 0).toLocaleString()}
                   </span>
                 </div>
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Completion</span>
-                  <span className="dept-card-stat-value-gold">{data.completion}%</span>
+                  <span className="dept-card-stat-value-gold">{c.completion ?? 0}%</span>
                 </div>
               </div>
               <div className="dept-progress-bar-bg">
-                <div className="dept-progress-bar-fill" style={{ width: `${data.completion}%` }} />
+                <div className="dept-progress-bar-fill" style={{ width: `${c.completion ?? 0}%` }} />
               </div>
             </div>
           ))}
@@ -217,8 +200,6 @@ export default function Departments({ onViewStudent }) {
   }
 
   // ── BREAKDOWN ──
-  const dept = departmentData[selectedDept];
-
   return (
     <>
       {/* Back */}
@@ -229,8 +210,8 @@ export default function Departments({ onViewStudent }) {
       {/* Header */}
       <div className="dept-breakdown-header">
         <div>
-          <h2 className="dept-breakdown-abbr">{selectedDept}</h2>
-          <p className="dept-breakdown-name">{dept.full}</p>
+          <h2 className="dept-breakdown-abbr">{dept?.college_name}</h2>
+          <p className="dept-breakdown-name">{dept?.full_name ?? dept?.college_name}</p>
         </div>
         <div className="dept-progress-bar-bg" style={{ width: "200px" }}>
           <div className="dept-progress-bar-fill" style={{ width: `${completionRate}%` }} />
@@ -271,8 +252,8 @@ export default function Departments({ onViewStudent }) {
           onChange={e => setFilterCourse(e.target.value)}
         >
           <option value="">All Courses</option>
-          {dept.courses.map(c => (
-            <option key={c} value={c}>{c}</option>
+          {dept?.programs?.map(p => (
+            <option key={p.program_id} value={p.program_name}>{p.program_name}</option>
           ))}
         </select>
       </div>
@@ -290,17 +271,17 @@ export default function Departments({ onViewStudent }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {paginated.length === 0 ? (
               <tr>
                 <td colSpan={5} className="dept-empty">No students found.</td>
               </tr>
             ) : (
-              filtered.map((s, i) => {
+              paginated.map((s, i) => {
                 const pct = Math.round((s.documents / 8) * 100);
                 return (
-                  <tr key={s.id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
-                    <td className="dept-td-first">{s.id}</td>
-                    <td className="dept-td-name">{s.name}</td>
+                  <tr key={s.student_id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
+                    <td className="dept-td-first">{s.student_id}</td>
+                    <td className="dept-td-name">{s.first_name} {s.last_name}</td>
                     <td className="dept-td">{s.course}</td>
                     <td className="dept-td">{s.year}</td>
                     <td className="dept-td">
@@ -321,6 +302,70 @@ export default function Departments({ onViewStudent }) {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {filtered.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+            Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * rowsPerPage + 1}</strong>
+            {" "}–{" "}
+            <strong style={{ color: "#111827" }}>{Math.min(currentPage * rowsPerPage, filtered.length)}</strong>
+            {" "}of{" "}
+            <strong style={{ color: "#111827" }}>{filtered.length}</strong>
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Prev
+            </button>
+
+            <span
+              style={{
+                border: "none",
+                borderRadius: "8px",
+                minWidth: "32px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                background: "#1a1a5e",
+                color: "#fff",
+              }}
+            >
+              {currentPage}
+            </span>
+
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

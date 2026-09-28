@@ -10,7 +10,11 @@ import AdminDashboard from "./AdminDashboard";
 import StaffAccounts from "./StaffAccounts";
 import SystemReports from "./SystemReports";
 import AuditLogs from "./AuditLogs";
-import { supabase } from "./supabaseClient";
+// ── RBAC ──
+import { AuthProvider, ProtectedPage } from "./AuthContext";
+import { normalizeRole, canAccessPage, getDefaultPage, clearAuthToken, revokeApiToken } from "./rbac";
+
+const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 // =====================================================
 // URL <-> PAGE MAPPING
@@ -23,7 +27,7 @@ import { supabase } from "./supabaseClient";
 //   /admin/staff-accounts   -> Staff Accounts
 //   /admin/system-reports   -> System Reports
 //   /admin/audit-logs       -> Audit Logs
-// All of these now have real Laravel routes, so a refresh on
+// All of these have real Laravel routes, so a refresh on
 // any of them re-requests the same path and this file can
 // restore the right screen straight from window.location.
 // =====================================================
@@ -115,13 +119,8 @@ export default function App() {
 
       return JSON.parse(saved);
     } catch (error) {
-      console.error(
-        "Failed to restore RegisScan session:",
-        error
-      );
-
+      console.error("Failed to restore RegisScan session:", error);
       localStorage.removeItem("regisscan_staff");
-
       return null;
     }
   });
@@ -131,15 +130,9 @@ export default function App() {
   // =====================================================
   const [savedStudentMode] = useState(() => {
     try {
-      return (
-        localStorage.getItem("regisscan_student_mode") === "true"
-      );
+      return localStorage.getItem("regisscan_student_mode") === "true";
     } catch (error) {
-      console.error(
-        "Failed to restore RegisScan student mode:",
-        error
-      );
-
+      console.error("Failed to restore RegisScan student mode:", error);
       return false;
     }
   });
@@ -147,12 +140,11 @@ export default function App() {
   // =====================================================
   // RESTORE ACTIVE PAGE
   //
-  // Every page except the bare Dashboard now has an explicit
+  // Every page except the bare Dashboard has an explicit
   // URL, so the URL is trusted whenever it points at one of
-  // those known paths. A bare "/" is still ambiguous (it's the
-  // real Dashboard route, but was also the fallback for admin
-  // pages before they had their own routes), so on a root path
-  // we defer to localStorage instead of assuming "Dashboard".
+  // those known paths. A bare "/" is ambiguous, so on a root
+  // path we defer to localStorage instead of assuming
+  // "Dashboard".
   // =====================================================
   const [activePage, setActivePageState] = useState(() => {
     try {
@@ -168,15 +160,9 @@ export default function App() {
         return page;
       }
 
-      return (
-        localStorage.getItem("regisscan_active_page") || "Dashboard"
-      );
+      return localStorage.getItem("regisscan_active_page") || "Dashboard";
     } catch (error) {
-      console.error(
-        "Failed to restore RegisScan active page:",
-        error
-      );
-
+      console.error("Failed to restore RegisScan active page:", error);
       return "Dashboard";
     }
   });
@@ -190,11 +176,7 @@ export default function App() {
       const { studentId } = pathToPage(window.location.pathname);
       return studentId || null;
     } catch (error) {
-      console.error(
-        "Failed to restore RegisScan selected student:",
-        error
-      );
-
+      console.error("Failed to restore RegisScan selected student:", error);
       return null;
     }
   });
@@ -202,45 +184,44 @@ export default function App() {
   // =====================================================
   // LOGIN STATE
   // =====================================================
-  const [loggedIn, setLoggedIn] = useState(
-    savedStaff !== null
-  );
+  const [loggedIn, setLoggedIn] = useState(savedStaff !== null);
 
   const [isAdmin, setIsAdmin] = useState(
     savedStaff?.user_role?.toLowerCase() === "admin"
   );
 
-  const [studentMode, setStudentMode] = useState(
-    savedStudentMode
-  );
+  const [studentMode, setStudentMode] = useState(savedStudentMode);
 
-  const [staffName, setStaffName] = useState(
-    savedStaff?.username || ""
-  );
+  const [staffName, setStaffName] = useState(savedStaff?.username || "");
 
   const [staffId, setStaffId] = useState(
-    savedStaff?.staff_id
-      ? Number(savedStaff.staff_id)
-      : null
+    savedStaff?.staff_id ? Number(savedStaff.staff_id) : null
+  );
+
+  // RBAC: canonical role ("Admin" | "Registrar Staff"), restored from the saved session
+  const [userRole, setUserRole] = useState(
+    savedStaff ? normalizeRole(savedStaff.user_role) : null
   );
 
   // =====================================================
-  // HANDLE ACTIVE PAGE CHANGE
+  // HANDLE ACTIVE PAGE CHANGE (persists to localStorage)
   // =====================================================
   const setActivePage = (page) => {
     setActivePageState(page);
 
     try {
-      localStorage.setItem(
-        "regisscan_active_page",
-        page
-      );
+      localStorage.setItem("regisscan_active_page", page);
     } catch (error) {
-      console.error(
-        "Failed to save RegisScan active page:",
-        error
-      );
+      console.error("Failed to save RegisScan active page:", error);
     }
+  };
+
+  // =====================================================
+  // RBAC: NAVIGATION GUARD — only pages this role may open
+  // =====================================================
+  const navigate = (page) => {
+    if (canAccessPage(userRole, page)) setActivePage(page);
+    else setActivePage(getDefaultPage());
   };
 
   // =====================================================
@@ -251,20 +232,12 @@ export default function App() {
 
     try {
       if (id) {
-        localStorage.setItem(
-          "regisscan_selected_student",
-          String(id)
-        );
+        localStorage.setItem("regisscan_selected_student", String(id));
       } else {
-        localStorage.removeItem(
-          "regisscan_selected_student"
-        );
+        localStorage.removeItem("regisscan_selected_student");
       }
     } catch (error) {
-      console.error(
-        "Failed to save RegisScan selected student:",
-        error
-      );
+      console.error("Failed to save RegisScan selected student:", error);
     }
   };
 
@@ -274,18 +247,11 @@ export default function App() {
   // the Laravel-backed routes (staff pages AND admin pages),
   // push the matching path so the address bar reflects it and
   // a refresh restores the same screen.
-  // =====================================================
-   // =====================================================
-  // KEEP THE URL PATH IN SYNC WITH APP STATE
-  // Whenever activePage/selectedStudentId change for one of
-  // the Laravel-backed routes (staff pages AND admin pages),
-  // push the matching path so the address bar reflects it and
-  // a refresh restores the same screen.
   //
   // Exception: Departments manages its own deeper path
   // (/departments/{dept_code}) internally, so if we're already
   // on a /departments/... sub-path, don't overwrite it back to
-  // the bare /departments — Departments.js owns that URL.
+  // the bare /departments — Departments owns that URL.
   // =====================================================
   useEffect(() => {
     if (!PATH_BACKED_PAGES.includes(activePage)) {
@@ -319,9 +285,8 @@ export default function App() {
       const isRootPath = pathname === "/" || pathname === "";
       const { page, studentId } = pathToPage(pathname);
 
-      // A bare "/" is still ambiguous on back/forward too, so
-      // don't force "Dashboard" just because the browser landed
-      // on "/" — leave state as-is in that case.
+      // A bare "/" is ambiguous on back/forward too, so leave
+      // state as-is in that case.
       if (!page || isRootPath) {
         return;
       }
@@ -339,8 +304,7 @@ export default function App() {
 
   // =====================================================
   // SAFETY NET: if we ever land on StudentProfile with no
-  // selected student, bounce back to Students. Runs as an
-  // effect (not during render) so it never fires mid-render.
+  // selected student, bounce back to Students.
   // =====================================================
   useEffect(() => {
     if (activePage === "StudentProfile" && !selectedStudentId) {
@@ -349,55 +313,52 @@ export default function App() {
   }, [activePage, selectedStudentId]);
 
   // =====================================================
+  // RBAC: if the page restored from the URL / localStorage /
+  // back-forward isn't allowed for this role, send the user
+  // to their default page. Restores and popstate bypass
+  // navigate(), so this covers them.
+  // =====================================================
+  useEffect(() => {
+    if (!loggedIn || !userRole) return;
+
+    if (!canAccessPage(userRole, activePage)) {
+      setSelectedStudentIdState(null);
+      setActivePage(getDefaultPage());
+    }
+  }, [loggedIn, userRole, activePage]);
+
+  // =====================================================
   // HANDLE VIEWING A STUDENT PROFILE
   // =====================================================
   const viewStudentProfile = (id) => {
     if (!id) {
-      console.error(
-        "Cannot open student profile: no student ID."
-      );
+      console.error("Cannot open student profile: no student ID.");
       return;
     }
 
-    // Save the student FIRST
+    // Save the student FIRST, then the page
     setSelectedStudentId(id);
-
-    // Then save the page
     setActivePage("StudentProfile");
   };
 
   // =====================================================
-  // HANDLE STUDENT MODE ENTRY
+  // HANDLE STUDENT MODE ENTRY / EXIT
   // =====================================================
   const enterStudentMode = () => {
     try {
-      localStorage.setItem(
-        "regisscan_student_mode",
-        "true"
-      );
+      localStorage.setItem("regisscan_student_mode", "true");
     } catch (error) {
-      console.error(
-        "Failed to save RegisScan student mode:",
-        error
-      );
+      console.error("Failed to save RegisScan student mode:", error);
     }
 
     setStudentMode(true);
   };
 
-  // =====================================================
-  // HANDLE STUDENT MODE EXIT
-  // =====================================================
   const exitStudentMode = () => {
     try {
-      localStorage.removeItem(
-        "regisscan_student_mode"
-      );
+      localStorage.removeItem("regisscan_student_mode");
     } catch (error) {
-      console.error(
-        "Failed to clear RegisScan student mode:",
-        error
-      );
+      console.error("Failed to clear RegisScan student mode:", error);
     }
 
     setStudentMode(false);
@@ -407,26 +368,27 @@ export default function App() {
   // HANDLE LOGIN
   // =====================================================
   const handleLogin = (name, role, id) => {
+    // RBAC: refuse accounts whose role is not one of the known roles
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole) {
+      clearAuthToken();
+      alert("Your account role is not recognized. Please contact the administrator.");
+      return;
+    }
+
     const numericStaffId = Number(id);
 
-    // Update React state
-    setIsAdmin(
-      role?.toLowerCase() === "admin"
-    );
-
+    setUserRole(normalizedRole); // RBAC
+    setIsAdmin(role?.toLowerCase() === "admin");
     setStaffName(name);
-
     setStaffId(numericStaffId);
-
     setLoggedIn(true);
 
     // Make sure we're not still flagged as student mode
     exitStudentMode();
 
-    // Start at Dashboard after login
+    // Start at Dashboard after login, with no previously selected student
     setActivePage("Dashboard");
-
-    // Clear any previously selected student
     setSelectedStudentId(null);
 
     // Save staff session
@@ -436,130 +398,65 @@ export default function App() {
       user_role: role,
     };
 
-    localStorage.setItem(
-      "regisscan_staff",
-      JSON.stringify(staffSession)
-    );
-
-    console.log(
-      "RegisScan login session saved:",
-      staffSession
-    );
+    try {
+      localStorage.setItem("regisscan_staff", JSON.stringify(staffSession));
+    } catch (error) {
+      console.error("Failed to save RegisScan session:", error);
+    }
   };
 
   // =====================================================
   // HANDLE LOGOUT
   // =====================================================
+  const clearSessionState = () => {
+    // Remove saved login session
+    localStorage.removeItem("regisscan_staff");
+    localStorage.removeItem("regisscan_student_mode");
+    localStorage.removeItem("regisscan_active_page");
+    localStorage.removeItem("regisscan_selected_student");
+
+    // Reset application state
+    setLoggedIn(false);
+    setIsAdmin(false);
+    setStaffName("");
+    setStaffId(null);
+    setUserRole(null); // RBAC
+    setStudentMode(false);
+    setActivePageState("Dashboard");
+    setSelectedStudentIdState(null);
+
+    window.history.pushState({ page: "Dashboard", studentId: null }, "", "/");
+  };
+
   const handleLogout = async () => {
     try {
-      // -------------------------------------------------
-      // UPDATE STAFF STATUS TO INACTIVE
-      // -------------------------------------------------
-      if (staffId) {
-        const { error } = await supabase
-          .from("tbl_staff")
-          .update({
-            status: "Inactive",
-          })
-          .eq(
-            "staff_id",
-            Number(staffId)
-          );
-
-        if (error) {
-          console.error(
-            "Failed to update staff status:",
-            error
-          );
-        }
-      }
-
-      // -------------------------------------------------
-      // REMOVE SAVED LOGIN SESSION
-      // -------------------------------------------------
-      localStorage.removeItem(
-        "regisscan_staff"
-      );
-
-      localStorage.removeItem(
-        "regisscan_student_mode"
-      );
-
-      localStorage.removeItem(
-        "regisscan_active_page"
-      );
-
-      localStorage.removeItem(
-        "regisscan_selected_student"
-      );
-
-      // -------------------------------------------------
-      // RESET APPLICATION STATE
-      // -------------------------------------------------
-      setLoggedIn(false);
-
-      setIsAdmin(false);
-
-      setStaffName("");
-
-      setStaffId(null);
-
-      setStudentMode(false);
-
-      setActivePageState("Dashboard");
-
-      setSelectedStudentIdState(null);
-
-      window.history.pushState({ page: "Dashboard", studentId: null }, "", "/");
-
-      console.log(
-        "RegisScan session cleared."
-      );
+      await revokeApiToken(); // RBAC: invalidate the API token on the server
     } catch (error) {
-      console.error(
-        "Logout error:",
-        error
-      );
-
-      // Even if database update fails,
-      // clear local session.
-      localStorage.removeItem(
-        "regisscan_staff"
-      );
-
-      localStorage.removeItem(
-        "regisscan_student_mode"
-      );
-
-      localStorage.removeItem(
-        "regisscan_active_page"
-      );
-
-      localStorage.removeItem(
-        "regisscan_selected_student"
-      );
-
-      setLoggedIn(false);
-      setIsAdmin(false);
-      setStaffName("");
-      setStaffId(null);
-      setStudentMode(false);
-      setActivePageState("Dashboard");
-      setSelectedStudentIdState(null);
-
-      window.history.pushState({ page: "Dashboard", studentId: null }, "", "/");
+      console.error("Failed to revoke API token:", error);
     }
+
+    clearAuthToken(); // RBAC: forget the token in this browser
+
+    if (staffId) {
+      // Set status to Inactive on logout.
+      // Routed through Laravel (service role) instead of the anon key,
+      // since tbl_staff has RLS enabled with no anon write policy.
+      try {
+        await fetch(`${API_BASE}/staff/${staffId}/logout`, { method: "POST" });
+      } catch (statusErr) {
+        console.error("Failed to set staff status to Inactive:", statusErr);
+      }
+    }
+
+    // Even if the calls above failed, always clear the local session.
+    clearSessionState();
   };
 
   // =====================================================
   // STUDENT MODE
   // =====================================================
   if (studentMode) {
-    return (
-      <StudentPreview
-        onBack={exitStudentMode}
-      />
-    );
+    return <StudentPreview onBack={exitStudentMode} />;
   }
 
   // =====================================================
@@ -595,14 +492,18 @@ export default function App() {
     };
 
     return (
-      <AdminDashboard
-        staffName={staffName}
-        onLogout={handleLogout}
-        activePage={activePage}
-        setActivePage={setActivePage}
-      >
-        {renderAdminPage()}
-      </AdminDashboard>
+      <AuthProvider role={userRole} staffId={staffId} staffName={staffName}>
+        <AdminDashboard
+          staffName={staffName}
+          onLogout={handleLogout}
+          activePage={activePage}
+          setActivePage={navigate}
+        >
+          <ProtectedPage page={activePage}>
+            {renderAdminPage()}
+          </ProtectedPage>
+        </AdminDashboard>
+      </AuthProvider>
     );
   }
 
@@ -611,35 +512,15 @@ export default function App() {
   // =====================================================
   const renderPage = () => {
     switch (activePage) {
-      // -------------------------------------------------
-      // STUDENTS
-      // -------------------------------------------------
       case "Students":
-        return (
-          <Students
-            onViewStudent={viewStudentProfile}
-          />
-        );
+        return <Students onViewStudent={viewStudentProfile} />;
 
-      // -------------------------------------------------
-      // DEPARTMENTS
-      // -------------------------------------------------
       case "Departments":
-        return (
-          <Departments
-            onViewStudent={viewStudentProfile}
-          />
-        );
+        return <Departments onViewStudent={viewStudentProfile} />;
 
-      // -------------------------------------------------
-      // REQUESTS
-      // -------------------------------------------------
       case "Requests":
         return <Requests />;
 
-      // -------------------------------------------------
-      // STUDENT PROFILE
-      // -------------------------------------------------
       case "StudentProfile":
         // The missing-student safety check lives in the
         // useEffect above, so this never triggers a state
@@ -654,11 +535,9 @@ export default function App() {
             staffName={staffName}
             onLogout={handleLogout}
             onBack={() => {
-              // Clear the saved student when
-              // intentionally going back.
+              // Clear the saved student when intentionally going back,
+              // then return to student records.
               setSelectedStudentId(null);
-
-              // Then go back to student records.
               setActivePage("Students");
             }}
           />
@@ -673,14 +552,17 @@ export default function App() {
   // STAFF DASHBOARD
   // =====================================================
   return (
-    <Dashboard
-      staffName={staffName}
-      activePage={activePage}
-      setActivePage={setActivePage}
-      onLogout={handleLogout}
-    >
-      {renderPage()}
-    </Dashboard>
+    <AuthProvider role={userRole} staffId={staffId} staffName={staffName}>
+      <Dashboard
+        staffName={staffName}
+        activePage={activePage}
+        setActivePage={navigate}
+        onLogout={handleLogout}
+      >
+        <ProtectedPage page={activePage}>
+          {renderPage()}
+        </ProtectedPage>
+      </Dashboard>
+    </AuthProvider>
   );
 }
-

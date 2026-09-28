@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import "./styles/SystemReports.css";
+import { authHeaders } from "./rbac"; // RBAC
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -97,8 +98,9 @@ export default function SystemReports() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/reports?year=${year}`)
+    fetch(`${API_BASE}/reports?year=${year}`, { headers: authHeaders() }) // RBAC
       .then(res => {
+        if (res.status === 401 || res.status === 403) throw new Error("Not authorized. Please log out and log in again."); // RBAC
         if (!res.ok) throw new Error("Couldn't load report data.");
         return res.json();
       })

@@ -1,6 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
+import { useAuth } from "./AuthContext"; // RBAC
 import "./styles/Dashboard.css";
+
+const ROWS_PER_PAGE = 10;
 
 const badgeClass = (type) => {
   const map = {
@@ -16,6 +19,7 @@ const badgeClass = (type) => {
 export default function Dashboard({ staffName, activePage, setActivePage, onLogout, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const { canAccess } = useAuth(); // RBAC
 
   // ── BACKEND STATE ──
   const [stats, setStats] = useState([
@@ -29,6 +33,7 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
   const [activityLog, setActivityLog] = useState([]);
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingActivity, setLoadingActivity] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // ── BACKEND: Fetch all stat counts ──
   useEffect(() => {
@@ -120,7 +125,19 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
     fetchActivity();
   }, []);
 
-  const navItems = ["Dashboard", "Students", "Departments", "Requests"];
+  // Reset to page 1 whenever the activity log reloads
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activityLog]);
+
+  const totalPages = Math.max(1, Math.ceil(activityLog.length / ROWS_PER_PAGE));
+  const paginatedActivity = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return activityLog.slice(start, start + ROWS_PER_PAGE);
+  }, [activityLog, currentPage]);
+
+  // RBAC: only show the menu items this role may open
+  const navItems = ["Dashboard", "Students", "Departments", "Requests"].filter((item) => canAccess(item));
 
   return (
     <div className="dash-layout">
@@ -225,30 +242,96 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
                 ) : activityLog.length === 0 ? (
                   <p style={{ padding: "1rem", color: "#888", fontSize: "0.9rem" }}>No activity recorded yet.</p>
                 ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="activity-thead">
-                        <th className="activity-th-first">Staff</th>
-                        <th className="activity-th">Action</th>
-                        <th className="activity-th">Type</th>
-                        <th className="activity-th">Date & Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activityLog.map((log, i) => (
-                        <tr key={log.id} className={i % 2 === 0 ? "activity-row-even" : "activity-row-odd"}>
-                          <td className="activity-td-staff">{log.user}</td>
-                          <td className="activity-td-action">
-                            {log.action} <span className="activity-td-subject">{log.subject}</span>
-                          </td>
-                          <td className="activity-td-type">
-                            <span className={badgeClass(log.type)}>{log.type}</span>
-                          </td>
-                          <td className="activity-td-date">{log.date}</td>
+                  <>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="activity-thead">
+                          <th className="activity-th-first">Staff</th>
+                          <th className="activity-th">Action</th>
+                          <th className="activity-th">Type</th>
+                          <th className="activity-th">Date & Time</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {paginatedActivity.map((log, i) => (
+                          <tr key={log.id} className={i % 2 === 0 ? "activity-row-even" : "activity-row-odd"}>
+                            <td className="activity-td-staff">{log.user}</td>
+                            <td className="activity-td-action">
+                              {log.action} <span className="activity-td-subject">{log.subject}</span>
+                            </td>
+                            <td className="activity-td-type">
+                              <span className={badgeClass(log.type)}>{log.type}</span>
+                            </td>
+                            <td className="activity-td-date">{log.date}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+                        <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+                          Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * ROWS_PER_PAGE + 1}</strong>
+                          {" "}–{" "}
+                          <strong style={{ color: "#111827" }}>{Math.min(currentPage * ROWS_PER_PAGE, activityLog.length)}</strong>
+                          {" "}of{" "}
+                          <strong style={{ color: "#111827" }}>{activityLog.length}</strong>
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                          <button
+                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                            disabled={currentPage === 1}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              fontSize: "0.85rem",
+                              fontWeight: 500,
+                              color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                              cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                              padding: "6px 10px",
+                            }}
+                          >
+                            Prev
+                          </button>
+
+                          <span
+                            style={{
+                              border: "none",
+                              borderRadius: "8px",
+                              minWidth: "32px",
+                              height: "32px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              background: "#1a1a5e",
+                              color: "#fff",
+                            }}
+                          >
+                            {currentPage}
+                          </span>
+
+                          <button
+                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                            disabled={currentPage === totalPages}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              fontSize: "0.85rem",
+                              fontWeight: 500,
+                              color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                              cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                              padding: "6px 10px",
+                            }}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </>

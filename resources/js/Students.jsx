@@ -1,14 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
+import { useAuth } from "./AuthContext"; // RBAC
+import { authHeaders, PERMISSIONS } from "./rbac"; // RBAC
 
-const yearLevels = [
-  { value: 1, label: "1st Year" },
-  { value: 2, label: "2nd Year" },
-  { value: 3, label: "3rd Year" },
-  { value: 4, label: "4th Year" },
-  { value: 5, label: "5th Year" },
-];
+const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
+const intToYearLevel = { 1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year" };
+const ROWS_PER_PAGE = 10;
 
 const statusClass = (status) => {
   if (status === "Active") return "status-badge status-active";
@@ -16,200 +14,149 @@ const statusClass = (status) => {
   return "status-badge status-inactive";
 };
 
-// ------------------------------------------------------------
-// Table styling (inline so it doesn't depend on extra CSS classes)
-// ------------------------------------------------------------
-const NAVY = "#1a1a6e";
-const GREY = "#6b7280";
+// ── OCR: Extract name fields via Laravel + Surya OCR backend ──
+const extractNameFromFile = async (file) => {
+  const formData = new FormData();
+  formData.append("file", file);
 
-const headerRowStyle = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
+  const response = await fetch("http://127.0.0.1:8000/api/ocr/extract", {
+    method: "POST",
+    headers: authHeaders(), // RBAC (do NOT set Content-Type here; the browser sets it for FormData)
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || "OCR request failed");
+  }
+
+  const data = await response.json();
+  if (!data.success) throw new Error(data.message || "OCR failed");
+
+  return {
+    first_name: data.first_name || "",
+    last_name: data.last_name || "",
+    middle_name: data.middle_name || "",
+  };
 };
 
-const addBtnStyle = {
-  background: NAVY,
-  color: "#fff",
-  fontWeight: 700,
-  fontSize: "1rem",
-  border: "none",
-  borderRadius: "10px",
-  padding: "14px 28px",
-  cursor: "pointer",
-};
-
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
-  textAlign: "left",
-};
-
-const thStyle = {
-  padding: "26px 16px",
-  fontSize: "0.78rem",
-  fontWeight: 700,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  color: "#8a8fa3",
-  textAlign: "left",
-  verticalAlign: "middle",
-};
-
-const tdBase = {
-  padding: "22px 16px",
-  verticalAlign: "middle",
-  textAlign: "left",
-  borderBottom: "1px solid #eef0f4",
-};
-
-const tdStyle = { ...tdBase, color: GREY };
-const tdIdStyle = { ...tdBase, color: NAVY, fontWeight: 700, paddingLeft: "32px" };
-const tdNameStyle = { ...tdBase, color: "#141446", fontWeight: 700 };
-
-// Keeps the in-memory list sorted the same way the initial Supabase
-// query is sorted ("order last_name"), so realtime inserts/updates
-// don't leave the table looking unsorted.
-const sortByLastName = (list) =>
-  [...list].sort((a, b) =>
-    String(a.last_name || "").localeCompare(String(b.last_name || ""))
-  );
-
-// NOTE: this component no longer keeps its own "which student is
-// selected" state or renders StudentProfile itself. Navigating to a
-// student profile is now entirely App.js's responsibility (via the
-// onViewStudent prop), so the URL/activePage logic in App.js is
-// actually in the loop this time.
-export default function Students({ onAddStudent, onViewStudent }) {
+// Navigating to a student profile is App's responsibility (via the
+// onViewStudent prop), so the URL/activePage logic in App stays in the loop.
+export default function Students({ onViewStudent }) {
+  const { can } = useAuth(); // RBAC
   const [students, setStudents] = useState([]);
-  const [colleges, setColleges] = useState([]);
-  const [programs, setPrograms] = useState([]);
-
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
+  const [departments, setDepartments] = useState([]);
+  const [coursesByDept, setCoursesByDept] = useState({});
   const [search, setSearch] = useState("");
-  const [filterCollege, setFilterCollege] = useState("");
-  const [filterProgram, setFilterProgram] = useState("");
+  const [filterDept, setFilterDept] = useState("");
   const [filterYear, setFilterYear] = useState("");
+  const [filterCourse, setFilterCourse] = useState("");
+  const [showModal, setShowModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
-  // ============================================================
-  // LOAD STUDENTS, COLLEGES AND PROGRAMS FROM SUPABASE
-  // Runs once when this component mounts. Since App.js unmounts
-  // Students and mounts StudentProfile instead when viewing a
-  // profile (rather than Students rendering StudentProfile inline
-  // as before), coming back to "Students" remounts this component
-  // fresh, which naturally reloads the list — same effect as the
-  // old selectedStudentId-based reload, without needing local
-  // navigation state.
-  // ============================================================
+  const [form, setForm] = useState({
+    id: "", department: "", course: "", email: "",
+    first_name: "", last_name: "", middle_name: "",
+  });
+  const [fileName, setFileName] = useState("");
 
+  // ── BACKEND: Fetch colleges ──
   useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true);
-        setError("");
-
-        const [studentRes, collegeRes, programRes] = await Promise.all([
-          supabase.from("tbl_student").select("*").order("last_name"),
-          supabase.from("tbl_college").select("*").order("college_name"),
-          supabase.from("tbl_program").select("*").order("program_name"),
-        ]);
-
-        if (studentRes.error) throw studentRes.error;
-        if (collegeRes.error) throw collegeRes.error;
-        if (programRes.error) throw programRes.error;
-
-        setStudents(studentRes.data || []);
-        setColleges(collegeRes.data || []);
-        setPrograms(programRes.data || []);
-      } catch (err) {
-        console.error("Load error:", err);
-        setError(err.message || "Failed to load students.");
-      } finally {
-        setLoading(false);
-      }
+    const fetchColleges = async () => {
+      const { data, error } = await supabase
+        .from("tbl_college")
+        .select("college_id, college_name")
+        .order("college_name");
+      if (!error && data) setDepartments(data);
     };
-
-    load();
+    fetchColleges();
   }, []);
 
-  // ============================================================
-  // REALTIME: keep the student list in sync with the database.
-  // Any insert/update/delete on tbl_student from any tab, device,
-  // or the scanner service's own writes gets pushed here live via
-  // Supabase Realtime (Postgres logical replication), no polling
-  // or manual refresh needed.
+  // ── BACKEND: Fetch programs grouped by college_id ──
+  useEffect(() => {
+    const fetchPrograms = async () => {
+      const { data, error } = await supabase
+        .from("tbl_program")
+        .select("program_id, program_name, college_id")
+        .order("program_name");
+      if (!error && data) {
+        const grouped = {};
+        data.forEach(p => {
+          if (!grouped[p.college_id]) grouped[p.college_id] = [];
+          grouped[p.college_id].push({ program_id: p.program_id, program_name: p.program_name });
+        });
+        setCoursesByDept(grouped);
+      }
+    };
+    fetchPrograms();
+  }, []);
+
+  // ── BACKEND: Fetch students ──
+  // showSpinner=false is used by realtime refreshes so the table
+  // doesn't flash "Loading students..." on every change.
+  const fetchStudents = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
+    const { data, error } = await supabase
+      .from("tbl_student")
+      .select(`
+        student_id, first_name, last_name, middle_name,
+        email, year_level, status,
+        tbl_college (college_id, college_name),
+        tbl_program (program_id, program_name)
+      `)
+      .order("last_name");
+
+    if (!error && data) {
+      setStudents(data.map(s => ({
+        id: s.student_id,
+        name: `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
+        first_name: s.first_name ?? "",
+        last_name: s.last_name ?? "",
+        middle_name: s.middle_name ?? "",
+        email: s.email ?? "",
+        department: s.tbl_college?.college_name ?? "—",
+        college_id: s.tbl_college?.college_id ?? null,
+        course: s.tbl_program?.program_name ?? "—",
+        program_id: s.tbl_program?.program_id ?? null,
+        year: intToYearLevel[s.year_level] ?? `Year ${s.year_level}`,
+        status: s.status ?? "Active",
+      })));
+    }
+    if (showSpinner) setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchStudents(); }, [fetchStudents]);
+
+  // ── REALTIME: keep the list in sync with the database ──
+  // Any insert/update/delete on tbl_student (other tabs, devices, the
+  // scanner service) triggers a silent refetch. Refetching (instead of
+  // patching state from the payload) keeps the joined college/program
+  // names correct, since realtime payloads only contain raw columns.
   //
   // Requires realtime to be enabled for tbl_student in Supabase
-  // (Database → Replication → tbl_student), and that RLS (if
-  // enabled) allows the current user to SELECT the rows involved.
-  // ============================================================
-
+  // (Database → Replication → tbl_student), and that RLS (if enabled)
+  // allows the current user to SELECT the rows involved.
   useEffect(() => {
     const channel = supabase
       .channel("realtime:tbl_student:list")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "tbl_student" },
-        (payload) => {
-          setStudents((prev) => {
-            let next = prev;
-
-            if (payload.eventType === "INSERT") {
-              const exists = prev.some(
-                (s) => s.student_id === payload.new.student_id
-              );
-              next = exists
-                ? prev.map((s) =>
-                    s.student_id === payload.new.student_id ? payload.new : s
-                  )
-                : [...prev, payload.new];
-            } else if (payload.eventType === "UPDATE") {
-              next = prev.map((s) =>
-                s.student_id === payload.new.student_id ? payload.new : s
-              );
-            } else if (payload.eventType === "DELETE") {
-              next = prev.filter(
-                (s) => s.student_id !== payload.old.student_id
-              );
-            }
-
-            return sortByLastName(next);
-          });
-        }
+        () => { fetchStudents(false); }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [fetchStudents]);
 
-  // ============================================================
-  // HELPERS
-  // ============================================================
-
-  const collegeOf = (s) =>
-    colleges.find((c) => Number(c.college_id) === Number(s.college_id));
-
-  const programOf = (s) =>
-    programs.find((p) => Number(p.program_id) === Number(s.program_id));
-
-  // List shows "First Last" (middle name is only shown on the profile)
-  const listNameOf = (s) =>
-    [s.first_name, s.last_name].filter(Boolean).join(" ");
-
-  const yearLabel = (value) =>
-    yearLevels.find((y) => Number(y.value) === Number(value))?.label || "—";
-
-  const programOptions = filterCollege
-    ? programs.filter((p) => Number(p.college_id) === Number(filterCollege))
-    : programs;
-
-  const filtered = students.filter((s) => {
+  const filtered = students.filter(s => {
     const term = search.trim().toLowerCase();
-
     const matchSearch =
       !term ||
       [s.first_name, s.middle_name, s.last_name]
@@ -217,162 +164,373 @@ export default function Students({ onAddStudent, onViewStudent }) {
         .join(" ")
         .toLowerCase()
         .includes(term) ||
-      String(s.student_id).includes(term);
-
-    const matchCollege = filterCollege
-      ? Number(s.college_id) === Number(filterCollege)
-      : true;
-
-    const matchProgram = filterProgram
-      ? Number(s.program_id) === Number(filterProgram)
-      : true;
-
-    const matchYear = filterYear
-      ? Number(s.year_level) === Number(filterYear)
-      : true;
-
-    return matchSearch && matchCollege && matchProgram && matchYear;
+      String(s.id).includes(term);
+    const matchDept = filterDept ? s.college_id === Number(filterDept) : true;
+    const matchYear = filterYear ? s.year === filterYear : true;
+    const matchCourse = filterCourse ? s.course === filterCourse : true;
+    return matchSearch && matchDept && matchYear && matchCourse;
   });
 
-  // ============================================================
-  // LIST
-  // ============================================================
+  // Reset to page 1 whenever the filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterDept, filterYear, filterCourse]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
+
+  // Keep the page in range if realtime removes rows from the last page
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return filtered.slice(start, start + ROWS_PER_PAGE);
+  }, [filtered, currentPage]);
+
+  const handleFormChange = (field, value) => {
+    setForm(prev => ({
+      ...prev,
+      [field]: value,
+      ...(field === "department" ? { course: "" } : {}),
+    }));
+  };
+
+  // ── OCR: Handle file attach and auto-extract name via Laravel + Surya ──
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setFileName(file.name);
+    setExtractError("");
+    setExtracting(true);
+
+    // Reset name fields while extracting
+    setForm(prev => ({ ...prev, first_name: "", last_name: "", middle_name: "" }));
+
+    try {
+      const extracted = await extractNameFromFile(file);
+      setForm(prev => ({
+        ...prev,
+        first_name: extracted.first_name || prev.first_name,
+        last_name: extracted.last_name || prev.last_name,
+        middle_name: extracted.middle_name || prev.middle_name,
+      }));
+    } catch (err) {
+      console.error("OCR extraction failed:", err);
+      setExtractError("Could not extract name from document. Please fill in manually.");
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  // ── BACKEND: Insert new student ──
+  const handleSubmit = async () => {
+    if (!can(PERMISSIONS.STUDENTS_CREATE)) return; // RBAC
+    if (!form.id || !form.department || !form.course || !form.first_name || !form.last_name) return;
+    setSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from("tbl_student")
+        .insert({
+          student_id: Number(form.id),
+          first_name: form.first_name,
+          last_name: form.last_name,
+          middle_name: form.middle_name || null,
+          email: form.email || null,
+          college_id: Number(form.department),
+          program_id: Number(form.course),
+          year_level: 1,
+          status: "Active",
+        });
+
+      if (error) {
+        console.error("Insert error:", error);
+        alert("Failed to save student. Please check the details and try again.");
+        return;
+      }
+
+      await fetchStudents();
+      setForm({ id: "", department: "", course: "", email: "", first_name: "", last_name: "", middle_name: "" });
+      setFileName("");
+      setExtractError("");
+      setShowModal(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <>
-      <div className="students-header" style={headerRowStyle}>
+      {/* Header */}
+      <div className="students-header">
         <h2 className="students-title">Student Records</h2>
-
-        <button
-          type="button"
-          style={addBtnStyle}
-          onClick={() => onAddStudent && onAddStudent()}
-        >
-          Add Student
-        </button>
+        {can(PERMISSIONS.STUDENTS_CREATE) && ( // RBAC: only roles allowed to add students
+          <button className="students-add-btn" onClick={() => setShowModal(true)}>
+            Add Student
+          </button>
+        )}
       </div>
 
-      {error && (
-        <div className="mb-4 p-3 rounded bg-red-100 text-red-700">{error}</div>
-      )}
-
+      {/* Filter Bar */}
       <div className="students-filter-bar">
         <input
           type="text"
           placeholder="Search by name or student ID..."
           className="students-search"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={e => setSearch(e.target.value)}
         />
-
         <select
           className="students-select"
-          value={filterCollege}
-          onChange={(e) => {
-            setFilterCollege(e.target.value);
-            setFilterProgram("");
-          }}
+          value={filterDept}
+          onChange={e => { setFilterDept(e.target.value); setFilterCourse(""); }}
         >
           <option value="">All Departments</option>
-          {colleges.map((c) => (
-            <option key={c.college_id} value={c.college_id}>
-              {c.college_name}
-            </option>
+          {departments.map(d => (
+            <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
           ))}
         </select>
-
-        <select
-          className="students-select"
-          value={filterProgram}
-          onChange={(e) => setFilterProgram(e.target.value)}
-        >
+        <select className="students-select" value={filterCourse} onChange={e => setFilterCourse(e.target.value)}>
           <option value="">All Courses</option>
-          {programOptions.map((p) => (
-            <option key={p.program_id} value={p.program_id}>
-              {p.program_name}
-            </option>
-          ))}
+          {(filterDept ? (coursesByDept[Number(filterDept)] || []) : Object.values(coursesByDept).flat())
+            .map(c => (
+              <option key={c.program_id} value={c.program_name}>{c.program_name}</option>
+            ))}
         </select>
-
-        <select
-          className="students-select"
-          value={filterYear}
-          onChange={(e) => setFilterYear(e.target.value)}
-        >
+        <select className="students-select" value={filterYear} onChange={e => setFilterYear(e.target.value)}>
           <option value="">All Year Levels</option>
-          {yearLevels.map((y) => (
-            <option key={y.value} value={y.value}>
-              {y.label}
-            </option>
-          ))}
+          {yearLevels.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
       </div>
 
+      {/* Table */}
       <div className="students-table-wrapper">
-        <table className="students-table" style={tableStyle}>
+        <table className="students-table">
           <thead>
             <tr className="students-thead">
-              <th style={{ ...thStyle, paddingLeft: "32px" }}>Student ID</th>
-              <th style={thStyle}>Full Name</th>
-              <th style={thStyle}>Department</th>
-              <th style={thStyle}>Course</th>
-              <th style={{ ...thStyle, width: "110px" }}>Year Level</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Record</th>
+              <th className="students-th-first">Student ID</th>
+              <th className="students-th">Full Name</th>
+              <th className="students-th">Department</th>
+              <th className="students-th">Course</th>
+              <th className="students-th">Year Level</th>
+              <th className="students-th">Status</th>
+              <th className="students-th">Record</th>
             </tr>
           </thead>
-
           <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={7} style={tdStyle}>
-                  Loading students...
-                </td>
-              </tr>
-            )}
-
-            {!loading && filtered.length === 0 && (
-              <tr>
-                <td colSpan={7} style={tdStyle}>
-                  No students found.
-                </td>
-              </tr>
-            )}
-
-            {!loading &&
-              filtered.map((student) => (
-                <tr key={student.student_id} style={{ background: "#fff" }}>
-                  <td style={tdIdStyle}>{student.student_id}</td>
-                  <td style={tdNameStyle}>{listNameOf(student)}</td>
-                  <td style={tdStyle}>
-                    {collegeOf(student)?.college_name || "—"}
+            {loading ? (
+              <tr><td colSpan={7} className="students-empty">Loading students...</td></tr>
+            ) : paginated.length === 0 ? (
+              <tr><td colSpan={7} className="students-empty">No students found.</td></tr>
+            ) : (
+              paginated.map((s, i) => (
+                <tr key={s.id} className={i % 2 === 0 ? "students-row-even" : "students-row-odd"}>
+                  <td className="students-td-first">{s.id}</td>
+                  <td className="students-td-name">{s.name}</td>
+                  <td className="students-td">{s.department}</td>
+                  <td className="students-td">{s.course}</td>
+                  <td className="students-td">{s.year}</td>
+                  <td className="students-td">
+                    <span className={statusClass(s.status)}>{s.status}</span>
                   </td>
-                  <td style={tdStyle}>
-                    {programOf(student)?.program_name || "—"}
-                  </td>
-                  <td style={tdStyle}>{yearLabel(student.year_level)}</td>
-
-                  <td style={tdBase}>
-                    <span className={statusClass(student.status)}>
-                      {student.status}
-                    </span>
-                  </td>
-
-                  <td style={tdBase}>
+                  <td className="students-td">
                     <button
                       className="students-view-btn"
-                      onClick={() =>
-                        onViewStudent && onViewStudent(student.student_id)
-                      }
+                      onClick={() => onViewStudent && onViewStudent(s.id)}
                     >
                       View
                     </button>
                   </td>
                 </tr>
-              ))}
+              ))
+            )}
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {!loading && filtered.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+            Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * ROWS_PER_PAGE + 1}</strong>
+            {" "}–{" "}
+            <strong style={{ color: "#111827" }}>{Math.min(currentPage * ROWS_PER_PAGE, filtered.length)}</strong>
+            {" "}of{" "}
+            <strong style={{ color: "#111827" }}>{filtered.length}</strong>
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Prev
+            </button>
+
+            <span
+              style={{
+                border: "none",
+                borderRadius: "8px",
+                minWidth: "32px",
+                height: "32px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                background: "#1a1a5e",
+                color: "#fff",
+              }}
+            >
+              {currentPage}
+            </span>
+
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "0.85rem",
+                fontWeight: 500,
+                color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                padding: "6px 10px",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Student Modal */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <h3 className="modal-title">Add Student</h3>
+            <p className="modal-sub">Fill in the details or extract information from a document.</p>
+
+            <label className="modal-label">Student ID</label>
+            <input
+              className="modal-input"
+              placeholder="e.g. 2021301754"
+              value={form.id}
+              onChange={e => handleFormChange("id", e.target.value)}
+            />
+
+            <label className="modal-label">Department</label>
+            <select
+              className="modal-select"
+              value={form.department}
+              onChange={e => handleFormChange("department", e.target.value)}
+            >
+              <option value="">Select Department</option>
+              {departments.map(d => (
+                <option key={d.college_id} value={d.college_id}>{d.college_name}</option>
+              ))}
+            </select>
+
+            <label className="modal-label">Course</label>
+            <select
+              className="modal-select"
+              value={form.course}
+              onChange={e => handleFormChange("course", e.target.value)}
+              disabled={!form.department}
+            >
+              <option value="">Select Course</option>
+              {(coursesByDept[Number(form.department)] || []).map(c => (
+                <option key={c.program_id} value={c.program_id}>{c.program_name}</option>
+              ))}
+            </select>
+
+            <label className="modal-label">Email Address</label>
+            <input
+              className="modal-input"
+              placeholder="e.g. juan.delacruz@ustp.edu.ph"
+              type="email"
+              value={form.email}
+              onChange={e => handleFormChange("email", e.target.value)}
+            />
+
+            {/* ── OCR File Attachment ── */}
+            <label className="modal-label">Extract Information</label>
+            <label
+              className="modal-extract-btn"
+              style={{ opacity: extracting ? 0.7 : 1, cursor: extracting ? "not-allowed" : "pointer" }}
+            >
+              {extracting
+                ? "⏳ Extracting name from document... (this may take a few minutes)"
+                : fileName
+                  ? `📄 ${fileName}`
+                  : "Attach a document to extract student information"}
+              <input
+                type="file"
+                accept=".jpg,.jpeg,.png,.pdf"
+                className="hidden"
+                disabled={extracting}
+                onChange={handleFileChange}
+              />
+            </label>
+
+            {extractError && (
+              <p style={{ color: "red", fontSize: "0.8rem", marginTop: "0.4rem" }}>{extractError}</p>
+            )}
+
+            {/* Name fields shown after file is attached — pre-filled by OCR */}
+            {fileName && (
+              <>
+                <label className="modal-label">First Name</label>
+                <input
+                  className="modal-input"
+                  placeholder={extracting ? "Extracting..." : "First name"}
+                  value={form.first_name}
+                  disabled={extracting}
+                  onChange={e => handleFormChange("first_name", e.target.value)}
+                />
+                <label className="modal-label">Last Name</label>
+                <input
+                  className="modal-input"
+                  placeholder={extracting ? "Extracting..." : "Last name"}
+                  value={form.last_name}
+                  disabled={extracting}
+                  onChange={e => handleFormChange("last_name", e.target.value)}
+                />
+                <label className="modal-label">
+                  Middle Name <span style={{ fontWeight: 400, color: "#999" }}>(optional)</span>
+                </label>
+                <input
+                  className="modal-input"
+                  placeholder={extracting ? "Extracting..." : "Middle name"}
+                  value={form.middle_name}
+                  disabled={extracting}
+                  onChange={e => handleFormChange("middle_name", e.target.value)}
+                />
+              </>
+            )}
+
+            <div className="modal-footer">
+              <button className="modal-cancel-btn" onClick={() => setShowModal(false)}>Cancel</button>
+              <button
+                className="modal-submit-btn"
+                onClick={handleSubmit}
+                disabled={submitting || extracting}
+              >
+                {submitting ? "Saving..." : "Save Student"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
