@@ -11,6 +11,28 @@ const badgeClass = (status) => {
   return "al-badge-warning";
 };
 
+// Shared select shape so the initial load and the realtime "fetch just
+// this row" path always map to the same log shape.
+const LOG_SELECT = `
+  activity_id,
+  activity_type,
+  activity_description,
+  module_name,
+  date_time,
+  status,
+  tbl_staff ( username )
+`;
+
+const mapLogRow = (row) => ({
+  id: row.activity_id,
+  timestamp: row.date_time,
+  name: row.tbl_staff?.username || "Unknown Staff",
+  type: row.activity_type,
+  description: row.activity_description,
+  module: row.module_name,
+  status: row.status,
+});
+
 export default function AuditLogs() {
   const [logs, setLogs]       = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,15 +47,7 @@ export default function AuditLogs() {
       setLoading(true);
       const { data, error } = await supabase
         .from("tbl_system_activity")
-        .select(`
-          activity_id,
-          activity_type,
-          activity_description,
-          module_name,
-          date_time,
-          status,
-          tbl_staff ( username )
-        `)
+        .select(LOG_SELECT)
         .order("date_time", { ascending: false });
 
       if (!isMounted) return;
@@ -42,16 +56,7 @@ export default function AuditLogs() {
         setErrorMsg(error.message);
         setLogs([]);
       } else {
-        const mapped = (data || []).map((row) => ({
-          id: row.activity_id,
-          timestamp: row.date_time,
-          name: row.tbl_staff?.username || "Unknown Staff",
-          type: row.activity_type,
-          description: row.activity_description,
-          module: row.module_name,
-          status: row.status,
-        }));
-        setLogs(mapped);
+        setLogs((data || []).map(mapLogRow));
         setErrorMsg("");
       }
       setLoading(false);
@@ -59,6 +64,66 @@ export default function AuditLogs() {
 
     fetchLogs();
     return () => { isMounted = false; };
+  }, []);
+
+  // ============================================================
+  // REALTIME: new/updated/deleted activity rows show up here live,
+  // as staff perform actions elsewhere in the app, with no manual
+  // refresh needed.
+  //
+  // Audit rows are inserted with just a staff_id, and the table
+  // display needs the joined username, so on INSERT/UPDATE this
+  // re-fetches that single row (with the tbl_staff join) rather than
+  // trusting the raw realtime payload, then merges it into the list.
+  //
+  // Requires realtime to be enabled for tbl_system_activity in
+  // Supabase (Database → Replication), and that RLS (if enabled)
+  // allows the current user to SELECT the rows involved.
+  // ============================================================
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime:tbl_system_activity")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tbl_system_activity" },
+        async (payload) => {
+          if (payload.eventType === "DELETE") {
+            setLogs((prev) =>
+              prev.filter((l) => l.id !== payload.old.activity_id)
+            );
+            return;
+          }
+
+          const activityId = payload.new.activity_id;
+
+          const { data, error } = await supabase
+            .from("tbl_system_activity")
+            .select(LOG_SELECT)
+            .eq("activity_id", activityId)
+            .single();
+
+          if (error || !data) return;
+
+          const mappedRow = mapLogRow(data);
+
+          setLogs((prev) => {
+            const exists = prev.some((l) => l.id === mappedRow.id);
+            const next = exists
+              ? prev.map((l) => (l.id === mappedRow.id ? mappedRow : l))
+              : [mappedRow, ...prev];
+
+            return [...next].sort(
+              (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+            );
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const todayStr = new Date().toISOString().slice(0, 10);

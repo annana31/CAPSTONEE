@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 import "./styles/StudentProfile.css";
@@ -103,6 +103,15 @@ export default function StudentProfile({ studentId, onBack }) {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editForm, setEditForm] = useState(initialStudent);
 
+  // Ref mirroring showEditModal so the realtime callback below
+  // (registered once per studentId) always sees the latest value
+  // without needing to resubscribe.
+  const showEditModalRef = useRef(showEditModal);
+
+  useEffect(() => {
+    showEditModalRef.current = showEditModal;
+  }, [showEditModal]);
+
   // ============================================================
   // LOAD COLLEGES, PROGRAMS AND THE SELECTED STUDENT
   // ============================================================
@@ -152,6 +161,61 @@ export default function StudentProfile({ studentId, onBack }) {
 
     return () => {
       cancelled = true;
+    };
+  }, [studentId]);
+
+  // ============================================================
+  // REALTIME: keep this profile in sync with the database. If the
+  // same student is edited elsewhere (another tab, another staff
+  // member, or a background job) while this profile is open, the
+  // displayed info updates live via Supabase Realtime instead of
+  // going stale until the next manual reload.
+  //
+  // Requires realtime to be enabled for tbl_student in Supabase
+  // (Database → Replication → tbl_student), and that RLS (if
+  // enabled) allows the current user to SELECT this row.
+  //
+  // While the Edit Information modal is open, incoming changes are
+  // still applied to the displayed student record, but NOT to
+  // editForm, so they don't overwrite whatever the user is
+  // currently typing. If the record is deleted elsewhere while
+  // open, the profile shows a clear message instead of stale data.
+  // ============================================================
+
+  useEffect(() => {
+    if (studentId === undefined || studentId === null || studentId === "") {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`realtime:tbl_student:${studentId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "tbl_student",
+          filter: `student_id=eq.${studentId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            setStudent(initialStudent);
+            setError("This student record was deleted.");
+            return;
+          }
+
+          // INSERT or UPDATE
+          setStudent(payload.new);
+
+          if (!showEditModalRef.current) {
+            setEditForm(payload.new);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
     };
   }, [studentId]);
 

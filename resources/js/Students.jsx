@@ -67,6 +67,14 @@ const tdStyle = { ...tdBase, color: GREY };
 const tdIdStyle = { ...tdBase, color: NAVY, fontWeight: 700, paddingLeft: "32px" };
 const tdNameStyle = { ...tdBase, color: "#141446", fontWeight: 700 };
 
+// Keeps the in-memory list sorted the same way the initial Supabase
+// query is sorted ("order last_name"), so realtime inserts/updates
+// don't leave the table looking unsorted.
+const sortByLastName = (list) =>
+  [...list].sort((a, b) =>
+    String(a.last_name || "").localeCompare(String(b.last_name || ""))
+  );
+
 // NOTE: this component no longer keeps its own "which student is
 // selected" state or renders StudentProfile itself. Navigating to a
 // student profile is now entirely App.js's responsibility (via the
@@ -124,6 +132,58 @@ export default function Students({ onAddStudent, onViewStudent }) {
     };
 
     load();
+  }, []);
+
+  // ============================================================
+  // REALTIME: keep the student list in sync with the database.
+  // Any insert/update/delete on tbl_student from any tab, device,
+  // or the scanner service's own writes gets pushed here live via
+  // Supabase Realtime (Postgres logical replication), no polling
+  // or manual refresh needed.
+  //
+  // Requires realtime to be enabled for tbl_student in Supabase
+  // (Database → Replication → tbl_student), and that RLS (if
+  // enabled) allows the current user to SELECT the rows involved.
+  // ============================================================
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime:tbl_student:list")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tbl_student" },
+        (payload) => {
+          setStudents((prev) => {
+            let next = prev;
+
+            if (payload.eventType === "INSERT") {
+              const exists = prev.some(
+                (s) => s.student_id === payload.new.student_id
+              );
+              next = exists
+                ? prev.map((s) =>
+                    s.student_id === payload.new.student_id ? payload.new : s
+                  )
+                : [...prev, payload.new];
+            } else if (payload.eventType === "UPDATE") {
+              next = prev.map((s) =>
+                s.student_id === payload.new.student_id ? payload.new : s
+              );
+            } else if (payload.eventType === "DELETE") {
+              next = prev.filter(
+                (s) => s.student_id !== payload.old.student_id
+              );
+            }
+
+            return sortByLastName(next);
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // ============================================================

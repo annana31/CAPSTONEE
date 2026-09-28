@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient"; 
 import "./styles/Requests.css";
 
@@ -88,7 +88,7 @@ function DetailRow({ label, value }) {
   );
 }
 
-function RequestDetailsModal({ request, onClose, onSetDueDate }) {
+function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancelling }) {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === "Escape") onClose();
@@ -210,6 +210,15 @@ function RequestDetailsModal({ request, onClose, onSetDueDate }) {
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+          {r.status === "Pending" && (
+            <button
+              onClick={() => onCancel(r.id)}
+              disabled={cancelling}
+              className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-4 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-400 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {cancelling ? "Cancelling…" : "Cancel Request"}
+            </button>
+          )}
           <button
             onClick={onClose}
             className="inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-xs font-semibold text-[#1f1d70] shadow-sm transition hover:border-[#1f1d70] hover:bg-[#f7f7fc]"
@@ -231,6 +240,9 @@ export default function Requests() {
   const [page, setPage] = useState(1);
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+
+  // Debounce ref for the realtime-triggered refetch below.
+  const refetchTimeoutRef = useRef(null);
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
@@ -283,6 +295,55 @@ export default function Requests() {
 
   useEffect(() => {
     fetchRequests();
+  }, [fetchRequests]);
+
+  // ============================================================
+  // REALTIME: reflect changes made anywhere else (another staff
+  // member completing a request, the public-facing request form
+  // creating a new one, a due date being set from another tab).
+  //
+  // Because each row here is built from a request joined with its
+  // student and multiple request-document rows, patching individual
+  // fields from a raw realtime payload would mean re-deriving that
+  // join by hand. Instead, any change to either tbl_request or
+  // tbl_request_document simply triggers a debounced refetch of the
+  // full list via fetchRequests() — simple and always consistent,
+  // and cheap enough for a request queue of this size. The debounce
+  // (400ms) coalesces bursts of events (e.g. a request plus several
+  // of its documents changing together) into a single refetch.
+  //
+  // Requires realtime to be enabled for tbl_request and
+  // tbl_request_document in Supabase (Database → Replication), and
+  // that RLS (if enabled) allows the current user to SELECT the rows
+  // involved.
+  // ============================================================
+
+  useEffect(() => {
+    const scheduleRefetch = () => {
+      if (refetchTimeoutRef.current) clearTimeout(refetchTimeoutRef.current);
+      refetchTimeoutRef.current = setTimeout(() => {
+        fetchRequests();
+      }, 400);
+    };
+
+    const channel = supabase
+      .channel("realtime:tbl_request-and-documents")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tbl_request" },
+        scheduleRefetch
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tbl_request_document" },
+        scheduleRefetch
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (refetchTimeoutRef.current) clearTimeout(refetchTimeoutRef.current);
+    };
   }, [fetchRequests]);
 
   const requests = useMemo(() => {
@@ -372,7 +433,9 @@ export default function Requests() {
       }
     }
 
-    // Reflect the change locally instead of a full refetch.
+    // Reflect the change locally instead of a full refetch. The
+    // realtime subscription above will also schedule a refetch from
+    // this same write, which just re-confirms the same state.
     setRawRequests(prev =>
       prev.map(r =>
         r.request_id === id
@@ -381,6 +444,46 @@ export default function Requests() {
               documents: r.documents.map(rd =>
                 idsToComplete.includes(rd.request_document_id)
                   ? { ...rd, status: "Completed" }
+                  : rd
+              ),
+            }
+          : r
+      )
+    );
+    setUpdatingId(null);
+  };
+
+  const handleCancel = async (id) => {
+    setUpdatingId(id);
+    const request = requests.find(r => r.id === id);
+    const idsToCancel = (request?.docs || [])
+      .filter(d => d.status !== "Completed" && d.status !== "Cancelled")
+      .map(d => d.requestDocumentId);
+
+    if (idsToCancel.length > 0) {
+      const { error: updateError } = await supabase
+        .from("tbl_request_document")
+        .update({ status: "Cancelled" })
+        .in("request_document_id", idsToCancel);
+
+      if (updateError) {
+        setError(updateError.message);
+        setUpdatingId(null);
+        return;
+      }
+    }
+
+    // Reflect the change locally instead of a full refetch. The
+    // realtime subscription above will also schedule a refetch from
+    // this same write, which just re-confirms the same state.
+    setRawRequests(prev =>
+      prev.map(r =>
+        r.request_id === id
+          ? {
+              ...r,
+              documents: r.documents.map(rd =>
+                idsToCancel.includes(rd.request_document_id)
+                  ? { ...rd, status: "Cancelled" }
                   : rd
               ),
             }
@@ -638,6 +741,8 @@ export default function Requests() {
           request={selectedRequest}
           onClose={() => setSelectedId(null)}
           onSetDueDate={handleSetDueDate}
+          onCancel={handleCancel}
+          cancelling={updatingId === selectedRequest.id}
         />
       )}
     </>
