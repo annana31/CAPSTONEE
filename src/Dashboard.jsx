@@ -10,29 +10,18 @@ const stats = [
   { label: "Current Requests", value: 23 },
 ];
 
-const activityLog = [
-  { id: 1, user: "Maria Santos", action: "Uploaded transcript for", subject: "Juan dela Cruz", type: "Credential Upload", date: "Jun 6, 2026 · 10:42 AM" },
-  { id: 2, user: "Carlo Reyes", action: "Approved request from", subject: "Ana Villanueva", type: "Request Approval", date: "Jun 6, 2026 · 10:15 AM" },
-  { id: 3, user: "Maria Santos", action: "Added new student record for", subject: "Pio Mangubat", type: "Student Record", date: "Jun 6, 2026 · 09:58 AM" },
-  { id: 4, user: "Admin", action: "Created new department", subject: "BS Data Science", type: "Department", date: "Jun 6, 2026 · 09:30 AM" },
-  { id: 5, user: "Carlo Reyes", action: "Rejected request from", subject: "Leo Fernandez", type: "Request Rejection", date: "Jun 5, 2026 · 04:47 PM" },
-  { id: 6, user: "Maria Santos", action: "Updated profile of", subject: "Rosa Lim", type: "Student Record", date: "Jun 5, 2026 · 03:20 PM" },
-  { id: 7, user: "Admin", action: "Deleted duplicate credential for", subject: "Mark Uy", type: "Credential Upload", date: "Jun 5, 2026 · 02:05 PM" },
-  { id: 8, user: "Carlo Reyes", action: "Approved request from", subject: "Sheila Gomez", type: "Request Approval", date: "Jun 5, 2026 · 01:33 PM" },
+const newStudents = [
+  { id: "2026-00123", name: "Juan dela Cruz", department: "College of Information Technology", course: "BS Information Technology", year: "1st Year" },
+  { id: "2026-00124", name: "Ana Villanueva", department: "College of Engineering", course: "BS Civil Engineering", year: "1st Year" },
+  { id: "2026-00125", name: "Pio Mangubat", department: "College of Science", course: "BS Data Science", year: "1st Year" },
+  { id: "2026-00126", name: "Rosa Lim", department: "College of Business", course: "BS Accountancy", year: "2nd Year" },
+  { id: "2026-00127", name: "Mark Uy", department: "College of Information Technology", course: "BS Computer Science", year: "2nd Year" },
+  { id: "2026-00128", name: "Sheila Gomez", department: "College of Education", course: "BSEd English", year: "3rd Year" },
+  { id: "2026-00129", name: "Leo Fernandez", department: "College of Engineering", course: "BS Electrical Engineering", year: "1st Year" },
+  { id: "2026-00130", name: "Carla Mendoza", department: "College of Business", course: "BS Marketing", year: "4th Year" },
 ];
 
-const badgeClass = (type) => {
-  const map = {
-    "Credential Upload": "badge badge-credential",
-    "Request Approval": "badge badge-approval",
-    "Request Rejection": "badge badge-rejection",
-    "Student Record": "badge badge-student",
-    "Department": "badge badge-department",
-  };
-  return map[type] || "badge badge-student";
-};
-
-export default function Dashboard({ staffName, activePage, setActivePage, onLogout, children }) {
+export default function Dashboard({ staffName, activePage, setActivePage, onLogout, onScanDocument, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -118,35 +107,35 @@ export default function Dashboard({ staffName, activePage, setActivePage, onLogo
                 })}
               </div>
 
-              {/* Activity Log */}
+              {/* New Students */}
               <div className="activity-wrapper">
                 <div className="activity-header">
                   <div>
-                    <h3 className="activity-header-title">Activity History</h3>
-                    <p className="activity-header-sub">All actions performed across the system</p>
+                    <h3 className="activity-header-title">New Students</h3>
+                    <p className="activity-header-sub">Recently added student records</p>
                   </div>
-                  <span className="activity-header-label">Latest First</span>
+                  <button className="scan-btn" onClick={onScanDocument}>
+                    Scan Document
+                  </button>
                 </div>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="activity-thead">
-                      <th className="activity-th-first">Staff</th>
-                      <th className="activity-th">Action</th>
-                      <th className="activity-th">Type</th>
-                      <th className="activity-th">Date & Time</th>
+                      <th className="activity-th-first">Student ID</th>
+                      <th className="activity-th">Full Name</th>
+                      <th className="activity-th">Department</th>
+                      <th className="activity-th">Course</th>
+                      <th className="activity-th">Year Level</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {activityLog.map((log, i) => (
-                      <tr key={log.id} className={i % 2 === 0 ? "activity-row-even" : "activity-row-odd"}>
-                        <td className="activity-td-staff">{log.user}</td>
-                        <td className="activity-td-action">
-                          {log.action} <span className="activity-td-subject">{log.subject}</span>
-                        </td>
-                        <td className="activity-td-type">
-                          <span className={badgeClass(log.type)}>{log.type}</span>
-                        </td>
-                        <td className="activity-td-date">{log.date}</td>
+                    {newStudents.map((s, i) => (
+                      <tr key={s.id} className={i % 2 === 0 ? "activity-row-even" : "activity-row-odd"}>
+                        <td className="activity-td-staff">{s.id}</td>
+                        <td className="activity-td-name">{s.name}</td>
+                        <td className="activity-td-action">{s.department}</td>
+                        <td className="activity-td-action">{s.course}</td>
+                        <td className="activity-td-year">{s.year}</td>
                       </tr>
                     ))}
                   </tbody>
