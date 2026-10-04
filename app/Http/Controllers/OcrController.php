@@ -25,8 +25,7 @@ class OcrController extends Controller
                     file_get_contents($file->getRealPath()),
                     $file->getClientOriginalName()
                 )
-                // Use the new name-extraction endpoint
-                ->post('http://127.0.0.1:5001/ocr/name');
+                ->post('http://127.0.0.1:5001/ocr');
 
             if (!$response->successful()) {
                 return response()->json([
@@ -49,6 +48,12 @@ class OcrController extends Controller
                 'first_name'  => $result['first_name'] ?? '',
                 'last_name'   => $result['last_name'] ?? '',
                 'middle_name' => $result['middle_name'] ?? '',
+
+                // Birthdate extracted by Python OCR
+                'birthdate'   => $result['birthdate']
+                    ?? $result['birthday']
+                    ?? '',
+
                 'raw_text'    => $result['raw_text'] ?? '',
             ]);
 

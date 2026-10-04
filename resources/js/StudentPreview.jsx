@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import axios from "axios";
 
 const requestTypes = [
@@ -47,152 +47,55 @@ const yearLevelMap = {
   1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year",
 };
 
-// ── Persistence keys ──────────────────────────────────────────────
-// StudentPreview has no Laravel route of its own (it's only reached
-// via App.js's studentMode flag, not a URL path), so localStorage is
-// the right place to persist its in-progress state across a refresh.
-const STORAGE_KEYS = {
-  studentId: "regisscan_preview_student_id",
-  showForm: "regisscan_preview_show_form",
-  step: "regisscan_preview_step",
-  preForm: "regisscan_preview_pre_form",
-  formStudentId: "regisscan_preview_form_student_id",
-  requestType: "regisscan_preview_request_type",
-  cavChoice: "regisscan_preview_cav_choice",
-  cavOther: "regisscan_preview_cav_other",
-  certChoice: "regisscan_preview_cert_choice",
-  certOther: "regisscan_preview_cert_other",
-  subjectSem: "regisscan_preview_subject_sem",
-  subjectSY1: "regisscan_preview_subject_sy1",
-  subjectSY2: "regisscan_preview_subject_sy2",
-  purpose: "regisscan_preview_purpose",
-};
-
-const readString = (key, fallback = "") => {
-  try {
-    return localStorage.getItem(key) ?? fallback;
-  } catch (error) {
-    console.error(`Failed to restore ${key}:`, error);
-    return fallback;
-  }
-};
-
-const readBool = (key, fallback = false) => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return fallback;
-    return raw === "true";
-  } catch (error) {
-    console.error(`Failed to restore ${key}:`, error);
-    return fallback;
-  }
-};
-
-const readJson = (key, fallback) => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error(`Failed to restore ${key}:`, error);
-    return fallback;
-  }
-};
-
-const writeValue = (key, value) => {
-  try {
-    if (value === null || value === undefined || value === "") {
-      localStorage.removeItem(key);
-    } else {
-      localStorage.setItem(
-        key,
-        typeof value === "string" ? value : JSON.stringify(value)
-      );
-    }
-  } catch (error) {
-    console.error(`Failed to save ${key}:`, error);
-  }
-};
-
-const defaultPreForm = {
-  contactNumber: "",
-  isGraduate: null,
-  graduateYear: "",
-  lastSem: "",
-  lastSY1: "",
-  lastSY2: "",
-  requestedBefore: null,
-  previousCredential: "",
-  previousRequestDate: "",
-  isCleared: null,
-};
-
 export default function StudentPreview({ onBack }) {
-  // ── Search state (backend-driven, now persisted) ──────────────
-  const [studentId, setStudentId] = useState(() =>
-    readString(STORAGE_KEYS.studentId)
-  );
-  const [requests, setRequests] = useState([]);
-  const [showForm, setShowForm] = useState(() =>
-    readBool(STORAGE_KEYS.showForm)
-  );
+  // ── Search state (backend-driven, unchanged) ─────────────────
+  const [studentId, setStudentId] = useState("");
+  const [requests,  setRequests]  = useState([]);
+  const [showForm,  setShowForm]  = useState(false);
 
-  // ── Two-step flow (now persisted) ─────────────────────────────
-  const [step, setStep] = useState(() =>
-    readString(STORAGE_KEYS.step, "pre")
-  ); // "pre" | "main"
+  // ── New: two-step flow ────────────────────────────────────────
+  const [step, setStep] = useState("pre"); // "pre" | "main"
 
-  // ── Pre-form state + validation (now persisted) ───────────────
-  const [preForm, setPreForm] = useState(() =>
-    readJson(STORAGE_KEYS.preForm, defaultPreForm)
-  );
+  // ── New: Pre-form state + validation ──────────────────────────
+  const [preForm, setPreForm] = useState({
+    contactNumber: "",
+    isGraduate: null,
+    graduateYear: "",
+    lastSem: "",
+    lastSY1: "",
+    lastSY2: "",
+    requestedBefore: null,
+    previousCredential: "",
+    previousRequestDate: "",
+    isCleared: null,
+  });
   const [preErrors, setPreErrors] = useState({});
 
-  // ── Main form state (backend-driven, now persisted) ───────────
-  const [formStudentId, setFormStudentId] = useState(() =>
-    readString(STORAGE_KEYS.formStudentId)
-  );
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [course, setCourse] = useState("");
-  const [yearLevel, setYearLevel] = useState("");
-  const [purpose, setPurpose] = useState(() =>
-    readString(STORAGE_KEYS.purpose)
-  );
-  const [studentFound, setStudentFound] = useState(false);
+  // ── Main form state (backend-driven, unchanged) ──────────────
+  const [formStudentId, setFormStudentId] = useState("");
+  const [fullName,      setFullName]      = useState("");
+  const [email,         setEmail]         = useState("");
+  const [course,        setCourse]        = useState("");
+  const [yearLevel,     setYearLevel]     = useState("");
+  const [purpose,       setPurpose]       = useState("");
+  const [studentFound,  setStudentFound]  = useState(false);
 
-  const [requestType, setRequestType] = useState(() =>
-    readString(STORAGE_KEYS.requestType, "CAV Certification")
-  );
-  const [cavChoice, setCavChoice] = useState(() =>
-    readString(STORAGE_KEYS.cavChoice)
-  );
-  const [cavOther, setCavOther] = useState(() =>
-    readString(STORAGE_KEYS.cavOther)
-  );
-  const [certChoice, setCertChoice] = useState(() =>
-    readString(STORAGE_KEYS.certChoice)
-  );
-  const [certOther, setCertOther] = useState(() =>
-    readString(STORAGE_KEYS.certOther)
-  );
-  const [subjectSem, setSubjectSem] = useState(() =>
-    readString(STORAGE_KEYS.subjectSem)
-  );
-  const [subjectSY1, setSubjectSY1] = useState(() =>
-    readString(STORAGE_KEYS.subjectSY1)
-  );
-  const [subjectSY2, setSubjectSY2] = useState(() =>
-    readString(STORAGE_KEYS.subjectSY2)
-  );
+  const [requestType, setRequestType] = useState("CAV Certification");
+  const [cavChoice,   setCavChoice]   = useState("");
+  const [cavOther,    setCavOther]    = useState("");
+  const [certChoice,  setCertChoice]  = useState("");
+  const [certOther,   setCertOther]   = useState("");
+  const [subjectSem,  setSubjectSem]  = useState("");
+  const [subjectSY1,  setSubjectSY1]  = useState("");
+  const [subjectSY2,  setSubjectSY2]  = useState("");
 
-  // ── Validation errors for the main form ───────────────────────
+  // ── New: validation errors for the main form ─────────────────
   const [mainErrors, setMainErrors] = useState({});
 
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting,      setSubmitting]      = useState(false);
   const [fetchingStudent, setFetchingStudent] = useState(false);
 
-  // ── Style helpers (unchanged) ─────────────────────────────────
+  // ── Style helpers (merged: validation-aware + read-only) ─────
   const inputClass = (hasError) =>
     `border ${hasError ? "border-red-400 bg-red-50" : "border-gray-300"} p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full`;
   const readOnlyClass = "border border-gray-200 p-3 rounded-lg text-sm w-full bg-gray-50 text-gray-500 cursor-not-allowed";
@@ -206,88 +109,7 @@ export default function StudentPreview({ onBack }) {
     ? <p className="text-xs text-red-500 mt-1 font-semibold">This field is required.</p>
     : null;
 
-  // ============================================================
-  // RESTORE ON MOUNT: if a Student ID was searched, or a form
-  // Student ID had already been looked up, re-run those so the
-  // screen looks the same as before the refresh instead of just
-  // restoring empty inputs.
-  // ============================================================
-
-  useEffect(() => {
-    if (studentId.trim()) {
-      searchRequest(studentId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (formStudentId.trim()) {
-      fetchStudent(formStudentId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ============================================================
-  // PERSIST STATE AS IT CHANGES
-  // ============================================================
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.studentId, studentId);
-  }, [studentId]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.showForm, showForm ? "true" : "false");
-  }, [showForm]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.step, step);
-  }, [step]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.preForm, preForm);
-  }, [preForm]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.formStudentId, formStudentId);
-  }, [formStudentId]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.requestType, requestType);
-  }, [requestType]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.cavChoice, cavChoice);
-  }, [cavChoice]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.cavOther, cavOther);
-  }, [cavOther]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.certChoice, certChoice);
-  }, [certChoice]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.certOther, certOther);
-  }, [certOther]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.subjectSem, subjectSem);
-  }, [subjectSem]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.subjectSY1, subjectSY1);
-  }, [subjectSY1]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.subjectSY2, subjectSY2);
-  }, [subjectSY2]);
-
-  useEffect(() => {
-    writeValue(STORAGE_KEYS.purpose, purpose);
-  }, [purpose]);
-
-  // ── Pre-form helpers (unchanged) ──────────────────────────────
+  // ── Pre-form helpers (new) ────────────────────────────────────
   const handlePreFormChange = (field, value) => {
     setPreForm(prev => ({ ...prev, [field]: value }));
     setPreErrors(prev => ({ ...prev, [field]: false }));
@@ -315,7 +137,7 @@ export default function StudentPreview({ onBack }) {
     setStep("main");
   };
 
-  // ── Reset (also clears persisted state) ───────────────────────
+  // ── Reset (extended to include pre-form + step) ──────────────
   const resetForm = () => {
     setFormStudentId(""); setFullName(""); setEmail("");
     setCourse(""); setYearLevel(""); setPurpose("");
@@ -325,12 +147,23 @@ export default function StudentPreview({ onBack }) {
     setCertChoice(""); setCertOther("");
     setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
     setMainErrors({});
-    setPreForm(defaultPreForm);
+    setPreForm({
+      contactNumber: "",
+      isGraduate: null,
+      graduateYear: "",
+      lastSem: "",
+      lastSY1: "",
+      lastSY2: "",
+      requestedBefore: null,
+      previousCredential: "",
+      previousRequestDate: "",
+      isCleared: null,
+    });
     setPreErrors({});
     setStep("pre");
   };
 
-  // ── Fetch student info (backend, unchanged) ───────────────────
+  // ── Fetch student info (backend, unchanged) ──────────────────
   const fetchStudent = async (id) => {
     if (!id.trim()) return;
     setFetchingStudent(true);
@@ -346,29 +179,25 @@ export default function StudentPreview({ onBack }) {
     } catch {
       setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
       setStudentFound(false);
-      // Don't alert here — this also runs silently on mount to
-      // restore a previous lookup, and a stale/invalid ID from a
-      // past session shouldn't pop an alert on every refresh.
+      alert("Student not found. Please check the Student ID.");
     } finally {
       setFetchingStudent(false);
     }
   };
 
-  // ── Search requests (backend, unchanged) ──────────────────────
-  const searchRequest = async (idOverride) => {
-    const id = (idOverride ?? studentId).trim();
-    if (!id) return;
+  // ── Search requests (backend, unchanged) ─────────────────────
+  const searchRequest = async () => {
+    if (!studentId.trim()) return;
     try {
-      const res = await axios.get(`/api/request/student/${id}`);
+      const res = await axios.get(`/api/request/student/${studentId}`);
       setRequests(res.data);
     } catch (error) {
       console.error(error.response?.data ?? error.message);
-      // Same reasoning as fetchStudent: this can run silently on
-      // mount, so avoid alerting on a restore.
+      alert("Could not fetch requests. Check your Student ID.");
     }
   };
 
-  // ── Validation for the main request form (unchanged) ──────────
+  // ── New: validation for the main request form ────────────────
   const validateMainForm = () => {
     const e = {};
     if (!formStudentId.trim()) e.studentId = true;
@@ -448,6 +277,56 @@ export default function StudentPreview({ onBack }) {
   // ── Render ────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-100 px-6 py-12">
+
+      {/* ── RESPONSIVE STYLES (added) ── */}
+      <style>{`
+        /* Phones (below 640px) */
+        @media (max-width: 639px) {
+          /* Page + card spacing */
+          .min-h-screen.px-6.py-12 { padding: 1.5rem 1rem; }
+          .rounded-2xl.p-8 { padding: 1.25rem; }
+          .rounded-2xl.p-6 { padding: 1rem; }
+          .rounded-2xl.p-5 { padding: 1rem; }
+          .section-fix, .bg-gray-50.rounded-xl.p-5 { padding: 1rem; }
+
+          /* Title */
+          h1.text-4xl { font-size: 1.75rem; line-height: 2.25rem; margin-bottom: 1.5rem; }
+
+          /* Stack the 3-column (Semester / S.Y. Start / S.Y. End) and 2-column pre-form grids */
+          .grid.grid-cols-3,
+          .grid.grid-cols-2 { grid-template-columns: 1fr; }
+
+          /* Search row and Student ID row: input on top, button/status below */
+          .flex.gap-3 { flex-direction: column; }
+          .flex.gap-3 > input { flex: none; width: 100%; }
+          .flex.gap-3 > button { width: 100%; }
+
+          /* Request cards: stack name/date above the status badge */
+          .flex.justify-between.items-center {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.75rem;
+          }
+
+          /* Full-width action buttons */
+          .justify-end > button,
+          button.mt-6 { width: 100%; }
+
+          /* Yes/No checkboxes wrap instead of overflowing */
+          .flex.items-center.gap-6 { flex-wrap: wrap; gap: 1rem; }
+        }
+
+        /* Tablets (640px to 1023px) */
+        @media (min-width: 640px) and (max-width: 1023px) {
+          .min-h-screen.px-6.py-12 { padding: 2rem 1.5rem; }
+          h1.text-4xl { font-size: 2.25rem; }
+        }
+
+        /* Prevent sideways scrolling on any device */
+        html, body { overflow-x: hidden; }
+        input, select, textarea { max-width: 100%; }
+      `}</style>
+
       <div className="max-w-4xl mx-auto">
 
         {/* Back */}
@@ -478,21 +357,21 @@ export default function StudentPreview({ onBack }) {
               className="flex-1 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm"
             />
             <button
-              onClick={() => searchRequest()}
+              onClick={searchRequest}
               className="bg-[#0A2342] text-white px-6 py-3 rounded-xl font-semibold hover:bg-[#0d2e57] transition"
             >
               Search
             </button>
           </div>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => { setShowForm(!showForm); setStep("pre"); }}
             className="mt-4 text-[#D4A017] font-semibold text-sm hover:underline"
           >
             {showForm ? "— Hide Form" : "+ Submit Request"}
           </button>
         </div>
 
-        {/* ── PRE-FORM ── */}
+        {/* ── PRE-FORM (new) ── */}
         {showForm && step === "pre" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <h2 className="text-xl font-black text-[#0A2342] mb-1 tracking-tight">Before You Proceed</h2>
@@ -691,7 +570,7 @@ export default function StudentPreview({ onBack }) {
           </div>
         )}
 
-        {/* ── MAIN REQUEST FORM ── */}
+        {/* ── MAIN REQUEST FORM (backend calls unchanged, validation UI added) ── */}
         {showForm && step === "main" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <button onClick={() => setStep("pre")} className="mb-5 text-sm font-semibold text-[#0A2342] hover:text-[#D4A017] transition">

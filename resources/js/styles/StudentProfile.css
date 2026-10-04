@@ -276,3 +276,46 @@
 .edit-grid {
   @apply grid grid-cols-2 gap-x-5;
 }
+
+/* ── OCR Confirmation Modal ── */
+
+.ocr-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  padding: 20px !important;
+  box-sizing: border-box !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  background: rgba(0, 0, 0, 0.6) !important;
+
+  z-index: 99999 !important;
+
+  overflow-y: auto !important;
+}
+
+.ocr-card {
+  position: relative !important;
+
+  width: min(1050px, 100%) !important;
+  max-width: 1050px !important;
+  max-height: calc(100vh - 40px) !important;
+
+  margin: auto !important;
+
+  background: #ffffff !important;
+  border-radius: 12px !important;
+
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.3) !important;
+
+  display: flex !important;
+  flex-direction: column !important;
+
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
