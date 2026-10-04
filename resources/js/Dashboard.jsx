@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthContext"; // RBAC
+import DocumentScanner from "./DocumentScanner.jsx";
+import useDocumentScanner from "./useDocumentScanner";
 import "./styles/Dashboard.css";
 
 const ROWS_PER_PAGE = 10;
@@ -22,13 +24,42 @@ export default function Dashboard({
   activePage,
   setActivePage,
   onLogout,
-  onScanDocument,
   children,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const { canAccess } = useAuth(); // RBAC
+
+  // ── SCANNER (reusable hook) ──
+  // No student is selected on the dashboard, so studentId is null.
+  // Your Flask /scan endpoint must accept a missing student_id,
+  // or you can add a student picker and pass the chosen id here.
+  const scanner = useDocumentScanner({
+    studentId: null,
+
+    onScanned: (credential, result) => {
+      console.log("Dashboard scan complete:", result.filename);
+    },
+
+    onConfirmed: async ({
+      studentId,
+      studentName,
+      documentType,
+      fileName,
+      fileUrl,
+    }) => {
+      // Save the confirmed document to your database/API here.
+      // OCRConfirmation passes the (possibly corrected) student and type.
+      console.log("Dashboard OCR confirmed:", {
+        studentId,
+        studentName,
+        documentType,
+        fileName,
+        fileUrl,
+      });
+    },
+  });
 
   // ── STATS STATE ──
   const [stats, setStats] = useState([
@@ -325,7 +356,7 @@ export default function Dashboard({
                     </p>
                   </div>
 
-                  <button className="scan-btn" onClick={onScanDocument}>
+                  <button className="scan-btn" onClick={() => scanner.open()}>
                     Scan Document
                   </button>
                 </div>
@@ -487,6 +518,13 @@ export default function Dashboard({
           )}
         </main>
       </div>
+
+      {/* SCAN MODAL + OCR CONFIRMATION (reusable) */}
+      <DocumentScanner
+        scanner={scanner}
+        studentId={null}
+        studentName=""
+      />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
+import { supabase } from "./supabaseClient";
 import "./styles/Departments.css";
-import { authHeaders } from "./rbac"; // RBAC
 
-const API_BASE = "http://127.0.0.1:8000/api";
+// Number of credential documents each student is expected to have
+const REQUIRED_DOCS = 8;
 
 const statusClass = (status) => {
   switch (status) {
@@ -18,7 +19,7 @@ const statusClass = (status) => {
 // Departments has its own Laravel route, /departments/{dept_code}.
 // This component manages its own sub-path. The code in the URL is
 // matched against college_name (e.g. "CITC"). Because colleges load
-// from the API, the match is resolved after the fetch completes.
+// from the database, the match is resolved after the fetch completes.
 // =====================================================
 const getDeptCodeFromPath = () => {
   try {
@@ -38,7 +39,7 @@ const getDeptCodeFromPath = () => {
 
 const findCollegeByCode = (list, code) => {
   if (!code) return null;
-  return list.find(c => String(c.college_name).toUpperCase() === code) ?? null;
+  return list.find((c) => String(c.college_name).toUpperCase() === code) ?? null;
 };
 
 export default function Departments({ onViewStudent }) {
@@ -48,6 +49,7 @@ export default function Departments({ onViewStudent }) {
   const [filterCourse, setFilterCourse] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 10;
 
@@ -56,7 +58,7 @@ export default function Departments({ onViewStudent }) {
     setSelectedDeptState(collegeId);
 
     try {
-      const college = colleges.find(c => c.college_id === collegeId);
+      const college = colleges.find((c) => c.college_id === collegeId);
       const nextPath = college
         ? `/departments/${encodeURIComponent(college.college_name)}`
         : "/departments";
@@ -64,22 +66,79 @@ export default function Departments({ onViewStudent }) {
       if (window.location.pathname !== nextPath) {
         window.history.pushState({ dept: collegeId }, "", nextPath);
       }
-    } catch (error) {
-      console.error("Failed to update department URL:", error);
+    } catch (err) {
+      console.error("Failed to update department URL:", err);
     }
   };
 
-  // ── Load colleges, then restore the selected dept from the URL ──
+  // ── Load colleges (+ programs, student/document counts) from Supabase ──
   useEffect(() => {
-    fetch(`${API_BASE}/colleges`, { headers: authHeaders() }) // RBAC
-      .then(res => res.json())
-      .then(data => {
-        setColleges(data);
-        const match = findCollegeByCode(data, getDeptCodeFromPath());
+    const loadColleges = async () => {
+      try {
+        setError("");
+
+        const [collegeRes, programRes, studentRes, docRes] = await Promise.all([
+          supabase.from("tbl_college").select("*").order("college_name"),
+          supabase.from("tbl_program").select("*").order("program_name"),
+          supabase.from("tbl_student").select("student_id, college_id"),
+          supabase.from("tbl_student_documents").select("student_id"),
+        ]);
+
+        if (collegeRes.error) throw collegeRes.error;
+        if (programRes.error) throw programRes.error;
+        if (studentRes.error) throw studentRes.error;
+        if (docRes.error) throw docRes.error;
+
+        // student_id → college_id
+        const collegeOfStudent = {};
+        const studentsPerCollege = {};
+
+        (studentRes.data ?? []).forEach((s) => {
+          collegeOfStudent[s.student_id] = s.college_id;
+          studentsPerCollege[s.college_id] =
+            (studentsPerCollege[s.college_id] || 0) + 1;
+        });
+
+        const docsPerCollege = {};
+        (docRes.data ?? []).forEach((d) => {
+          const cid = collegeOfStudent[d.student_id];
+          if (cid != null) {
+            docsPerCollege[cid] = (docsPerCollege[cid] || 0) + 1;
+          }
+        });
+
+        const list = (collegeRes.data ?? []).map((c) => {
+          const students_count = studentsPerCollege[c.college_id] || 0;
+          const documents_count = docsPerCollege[c.college_id] || 0;
+          const expected = students_count * REQUIRED_DOCS;
+
+          return {
+            ...c,
+            programs: (programRes.data ?? []).filter(
+              (p) => Number(p.college_id) === Number(c.college_id)
+            ),
+            students_count,
+            documents_count,
+            completion: expected
+              ? Math.min(100, Math.round((documents_count / expected) * 100))
+              : 0,
+          };
+        });
+
+        setColleges(list);
+
+        const match = findCollegeByCode(list, getDeptCodeFromPath());
         setSelectedDeptState(match ? match.college_id : null);
-      })
-      .catch(err => console.error("Failed to load colleges:", err))
-      .finally(() => setLoading(false));
+      } catch (err) {
+        console.error("Failed to load colleges:", err);
+        setColleges([]);
+        setError(err.message || "Failed to load departments.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadColleges();
   }, []);
 
   // ── Keep state in sync when the user uses browser back/forward ──
@@ -93,29 +152,81 @@ export default function Departments({ onViewStudent }) {
     return () => window.removeEventListener("popstate", handlePopState);
   }, [colleges]);
 
+  // ── Load students of the selected college from Supabase ──
   useEffect(() => {
     if (!selectedDept) return;
-    fetch(`${API_BASE}/colleges/${selectedDept}/students`, { headers: authHeaders() }) // RBAC
-      .then(res => res.json())
-      .then(data => setStudents(data))
-      .catch(err => console.error("Failed to load students:", err));
+
+    let cancelled = false;
+
+    const loadStudents = async () => {
+      try {
+        const { data, error: studentErr } = await supabase
+          .from("tbl_student")
+          .select("*")
+          .eq("college_id", selectedDept)
+          .order("student_id");
+
+        if (studentErr) throw studentErr;
+
+        const ids = (data ?? []).map((s) => s.student_id);
+        const docCount = {};
+
+        if (ids.length > 0) {
+          const { data: docs, error: docErr } = await supabase
+            .from("tbl_student_documents")
+            .select("student_id")
+            .in("student_id", ids);
+
+          if (docErr) throw docErr;
+
+          (docs ?? []).forEach((d) => {
+            docCount[d.student_id] = (docCount[d.student_id] || 0) + 1;
+          });
+        }
+
+        if (cancelled) return;
+
+        setStudents(
+          (data ?? []).map((s) => ({
+            ...s,
+            documents: docCount[s.student_id] || 0,
+          }))
+        );
+      } catch (err) {
+        console.error("Failed to load students:", err);
+        if (!cancelled) {
+          setStudents([]);
+          setError(err.message || "Failed to load students.");
+        }
+      }
+    };
+
+    loadStudents();
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedDept]);
 
-  const dept = colleges.find(c => c.college_id === selectedDept);
+  const dept = colleges.find((c) => c.college_id === selectedDept);
 
   const enrichedStudents = useMemo(() => {
-    return students.map(s => ({
+    return students.map((s) => ({
       ...s,
-      course: dept?.programs?.find(p => p.program_id === s.program_id)?.program_name ?? "",
+      course:
+        dept?.programs?.find((p) => p.program_id === s.program_id)
+          ?.program_name ?? "",
       year: s.year_level,
-      documents: s.documents ?? 0, // real count from the API
+      documents: s.documents ?? 0,
     }));
   }, [students, dept]);
 
   const filtered = useMemo(() => {
-    return enrichedStudents.filter(s => {
+    return enrichedStudents.filter((s) => {
       const fullName = `${s.first_name} ${s.last_name}`.toLowerCase();
-      const matchSearch = fullName.includes(search.toLowerCase()) || String(s.student_id).includes(search);
+      const matchSearch =
+        fullName.includes(search.toLowerCase()) ||
+        String(s.student_id).includes(search);
       const matchCourse = filterCourse ? s.course === filterCourse : true;
       return matchSearch && matchCourse;
     });
@@ -136,7 +247,7 @@ export default function Departments({ onViewStudent }) {
   const completionRate = selectedDept
     ? filterCourse
       ? Math.round(50 + (filterCourse.length % 30))
-      : (dept?.completion ?? 0)
+      : dept?.completion ?? 0
     : 0;
 
   const handleDeptClick = (collegeId) => {
@@ -155,6 +266,12 @@ export default function Departments({ onViewStudent }) {
 
   if (loading) return <p>Loading departments...</p>;
 
+  if (error && colleges.length === 0) {
+    return (
+      <div className="mt-4 p-3 rounded bg-red-100 text-red-700">{error}</div>
+    );
+  }
+
   // ── OVERVIEW ──
   if (!selectedDept) {
     return (
@@ -166,31 +283,46 @@ export default function Departments({ onViewStudent }) {
 
         <div className="dept-grid">
           {colleges.map((c) => (
-            <div key={c.college_id} className="dept-card" onClick={() => handleDeptClick(c.college_id)}>
+            <div
+              key={c.college_id}
+              className="dept-card"
+              onClick={() => handleDeptClick(c.college_id)}
+            >
               <div className="dept-card-top">
                 <div className="dept-card-icon">
                   <div className="dept-card-icon-inner" />
                 </div>
                 <span className="dept-card-abbr">{c.college_name}</span>
               </div>
+
               <div className="dept-card-stats">
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Students</span>
-                  <span className="dept-card-stat-value">{(c.students_count ?? 0).toLocaleString()}</span>
+                  <span className="dept-card-stat-value">
+                    {(c.students_count ?? 0).toLocaleString()}
+                  </span>
                 </div>
+
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Credentials</span>
                   <span className="dept-card-stat-value">
                     {(c.documents_count ?? 0).toLocaleString()}
                   </span>
                 </div>
+
                 <div className="dept-card-stat-row">
                   <span className="dept-card-stat-label">Completion</span>
-                  <span className="dept-card-stat-value-gold">{c.completion ?? 0}%</span>
+                  <span className="dept-card-stat-value-gold">
+                    {c.completion ?? 0}%
+                  </span>
                 </div>
               </div>
+
               <div className="dept-progress-bar-bg">
-                <div className="dept-progress-bar-fill" style={{ width: `${c.completion ?? 0}%` }} />
+                <div
+                  className="dept-progress-bar-fill"
+                  style={{ width: `${c.completion ?? 0}%` }}
+                />
               </div>
             </div>
           ))}
@@ -207,14 +339,24 @@ export default function Departments({ onViewStudent }) {
         &larr; Back to Departments
       </button>
 
+      {error && (
+        <div className="mb-4 p-3 rounded bg-red-100 text-red-700">{error}</div>
+      )}
+
       {/* Header */}
       <div className="dept-breakdown-header">
         <div>
           <h2 className="dept-breakdown-abbr">{dept?.college_name}</h2>
-          <p className="dept-breakdown-name">{dept?.full_name ?? dept?.college_name}</p>
+          <p className="dept-breakdown-name">
+            {dept?.full_name ?? dept?.college_name}
+          </p>
         </div>
+
         <div className="dept-progress-bar-bg" style={{ width: "200px" }}>
-          <div className="dept-progress-bar-fill" style={{ width: `${completionRate}%` }} />
+          <div
+            className="dept-progress-bar-fill"
+            style={{ width: `${completionRate}%` }}
+          />
         </div>
       </div>
 
@@ -225,11 +367,13 @@ export default function Departments({ onViewStudent }) {
           <p className="dept-summary-value">{totalStudents.toLocaleString()}</p>
           <div className="dept-summary-accent" />
         </div>
+
         <div className="dept-summary-card">
           <p className="dept-summary-label">Documents Uploaded</p>
           <p className="dept-summary-value">{totalDocs.toLocaleString()}</p>
           <div className="dept-summary-accent" />
         </div>
+
         <div className="dept-summary-card">
           <p className="dept-summary-label">Completion Rate</p>
           <p className="dept-summary-value-gold">{completionRate}%</p>
@@ -244,16 +388,19 @@ export default function Departments({ onViewStudent }) {
           placeholder="Search by name or student ID..."
           className="dept-search"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={(e) => setSearch(e.target.value)}
         />
+
         <select
           className="dept-select"
           value={filterCourse}
-          onChange={e => setFilterCourse(e.target.value)}
+          onChange={(e) => setFilterCourse(e.target.value)}
         >
           <option value="">All Courses</option>
-          {dept?.programs?.map(p => (
-            <option key={p.program_id} value={p.program_name}>{p.program_name}</option>
+          {dept?.programs?.map((p) => (
+            <option key={p.program_id} value={p.program_name}>
+              {p.program_name}
+            </option>
           ))}
         </select>
       </div>
@@ -270,18 +417,30 @@ export default function Departments({ onViewStudent }) {
               <th className="dept-th">Credential Completion</th>
             </tr>
           </thead>
+
           <tbody>
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={5} className="dept-empty">No students found.</td>
+                <td colSpan={5} className="dept-empty">
+                  No students found.
+                </td>
               </tr>
             ) : (
               paginated.map((s, i) => {
-                const pct = Math.round((s.documents / 8) * 100);
+                const pct = Math.min(
+                  100,
+                  Math.round((s.documents / REQUIRED_DOCS) * 100)
+                );
+
                 return (
-                  <tr key={s.student_id} className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}>
+                  <tr
+                    key={s.student_id}
+                    className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}
+                  >
                     <td className="dept-td-first">{s.student_id}</td>
-                    <td className="dept-td-name">{s.first_name} {s.last_name}</td>
+                    <td className="dept-td-name">
+                      {s.first_name} {s.last_name}
+                    </td>
                     <td className="dept-td">{s.course}</td>
                     <td className="dept-td">{s.year}</td>
                     <td className="dept-td">
@@ -292,7 +451,9 @@ export default function Departments({ onViewStudent }) {
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className="text-xs font-bold text-gray-500 w-8 text-right">{pct}%</span>
+                        <span className="text-xs font-bold text-gray-500 w-8 text-right">
+                          {pct}%
+                        </span>
                       </div>
                     </td>
                   </tr>
@@ -305,17 +466,31 @@ export default function Departments({ onViewStudent }) {
 
       {/* Pagination */}
       {filtered.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", padding: "0 4px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginTop: "16px",
+            padding: "0 4px",
+          }}
+        >
           <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-            Showing <strong style={{ color: "#111827" }}>{(currentPage - 1) * rowsPerPage + 1}</strong>
+            Showing{" "}
+            <strong style={{ color: "#111827" }}>
+              {(currentPage - 1) * rowsPerPage + 1}
+            </strong>
             {" "}–{" "}
-            <strong style={{ color: "#111827" }}>{Math.min(currentPage * rowsPerPage, filtered.length)}</strong>
+            <strong style={{ color: "#111827" }}>
+              {Math.min(currentPage * rowsPerPage, filtered.length)}
+            </strong>
             {" "}of{" "}
             <strong style={{ color: "#111827" }}>{filtered.length}</strong>
           </span>
+
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
               style={{
                 border: "none",
@@ -349,7 +524,7 @@ export default function Departments({ onViewStudent }) {
             </span>
 
             <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
               style={{
                 border: "none",
