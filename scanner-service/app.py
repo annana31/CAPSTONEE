@@ -199,17 +199,11 @@ def scan_document():
 
         data = request.get_json(silent=True) or {}
 
-        student_id = data.get("student_id")
+        # Scanning only needs the scanner; the student is confirmed
+        # afterwards on the OCR confirmation screen.
         device_uid = data.get("device_uid")
 
-        print(f"Student ID: {student_id}")
         print(f"Requested scanner: {device_uid}")
-
-        if not student_id:
-            return jsonify({
-        "success": False,
-        "message": "No student ID was provided."
-    }), 400
 
         if not device_uid:
             return jsonify({
@@ -293,13 +287,12 @@ def scan_document():
         return jsonify({
             "success": True,
             "message": "Document scanned successfully.",
-            "student_id": student_id,
             "filename": filename,
             "file_url": file_url,
             "scanner": {
-            "id": device_uid
-    }
-})
+                "id": device_uid
+            }
+        })
 
     except Exception as e:
         print("\nSCAN ERROR")

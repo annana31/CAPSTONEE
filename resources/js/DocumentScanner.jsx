@@ -314,8 +314,8 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
 
       {showOCRConfirmation && ocrResult && (
         <OCRConfirmation
-          studentId={studentId}
-          studentName={studentName}
+          studentId={studentId ?? ""}
+          studentName={studentName ?? ""}
           fileName={ocrResult.filename || ""}
           fileUrl={ocrResult.file_url || ""}
           detectedDocType={ocrResult.document_type || ""}

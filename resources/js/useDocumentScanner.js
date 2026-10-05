@@ -5,19 +5,12 @@ import { SCANNER_URL, absoluteUrl } from "./scannerUtils";
  * Reusable document-scanning logic.
  *
  * @param {object}   options
- * @param {string}   options.studentId   Student the scan belongs to
- * @param {function} options.onScanned   (credential, result) => void
- *                                       Called right after a successful scan.
- * @param {function} options.onConfirmed (payload, credential) => void | Promise
- *                                       Called when the OCR confirmation is saved.
- *
- * Usage:
- *   const scanner = useDocumentScanner({ studentId, onScanned, onConfirmed });
- *   <button onClick={() => scanner.open(credential)}>Scan</button>
- *   <DocumentScanner scanner={scanner} studentId={id} studentName={name} />
+ * @param {function} options.onScanned  
+ *                                      
+ * @param {function} options.onConfirmed 
+ *                                       
  */
 export default function useDocumentScanner({
-  studentId,
   onScanned,
   onConfirmed,
 } = {}) {
@@ -133,13 +126,11 @@ export default function useDocumentScanner({
       setScanning(true);
       setScanError("");
 
+      // Scanning only needs the chosen scanner (no student ID)
       const response = await fetch(`${SCANNER_URL}/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          student_id: studentId,
-          device_uid: scanner.id,
-        }),
+        body: JSON.stringify({ device_uid: scanner.id }),
       });
 
       let data = null;

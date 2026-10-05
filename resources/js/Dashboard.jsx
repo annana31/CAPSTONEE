@@ -32,12 +32,7 @@ export default function Dashboard({
   const { canAccess } = useAuth(); // RBAC
 
   // ── SCANNER (reusable hook) ──
-  // No student is selected on the dashboard, so studentId is null.
-  // Your Flask /scan endpoint must accept a missing student_id,
-  // or you can add a student picker and pass the chosen id here.
   const scanner = useDocumentScanner({
-    studentId: null,
-
     onScanned: (credential, result) => {
       console.log("Dashboard scan complete:", result.filename);
     },
@@ -520,11 +515,7 @@ export default function Dashboard({
       </div>
 
       {/* SCAN MODAL + OCR CONFIRMATION (reusable) */}
-      <DocumentScanner
-        scanner={scanner}
-        studentId={null}
-        studentName=""
-      />
+      <DocumentScanner scanner={scanner} />
     </div>
   );
 }
