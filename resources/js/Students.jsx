@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 import { useAuth } from "./AuthContext"; // RBAC
-import { authHeaders, PERMISSIONS } from "./rbac"; // RBAC
+import { PERMISSIONS } from "./rbac"; // RBAC
 
 const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
 const statuses = ["Active", "LOA", "Inactive", "Graduated"];
@@ -37,42 +37,26 @@ const statusClass = (status) => {
   return "status-badge status-inactive";
 };
 
-// ============================================================
-// OCR: Extract student information via Laravel + PaddleOCR
-// ============================================================
-const extractNameFromFile = async (file) => {
-  const formData = new FormData();
-  formData.append("file", file);
+const emptyForm = () => ({
+  enrollYear: String(currentYear),
+  idSuffix: "",
 
-  const response = await fetch(
-    "http://127.0.0.1:8000/api/ocr/extract",
-    {
-      method: "POST",
-      headers: authHeaders(),
-      body: formData,
-    }
-  );
+  first_name: "",
+  last_name: "",
+  middle_name: "",
+  birthdate: "",
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.message || "OCR request failed");
-  }
+  gender: "Female",
+  email: "",
+  contact: "",
+  address: "",
 
-  const data = await response.json();
+  department: "",
+  course: "",
 
-  console.log("OCR RESPONSE FROM LARAVEL:", data);
-
-  if (!data.success) {
-    throw new Error(data.message || "OCR failed");
-  }
-
-  return {
-    first_name: data.first_name || "",
-    last_name: data.last_name || "",
-    middle_name: data.middle_name || "",
-    birthdate: data.birthdate || data.birthday || "",
-  };
-};
+  yearLevel: "1st Year",
+  status: "Active",
+});
 
 // ============================================================
 // STUDENTS COMPONENT
@@ -93,35 +77,12 @@ export default function Students({ onViewStudent }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const [extracting, setExtracting] = useState(false);
-  const [extractError, setExtractError] = useState("");
-  const [fileName, setFileName] = useState("");
-
   const [currentPage, setCurrentPage] = useState(1);
 
   // ============================================================
   // FORM
   // ============================================================
-  const [form, setForm] = useState({
-    enrollYear: String(currentYear),
-    idSuffix: "",
-
-    first_name: "",
-    last_name: "",
-    middle_name: "",
-    birthdate: "",
-
-    gender: "Female",
-    email: "",
-    contact: "",
-    address: "",
-
-    department: "",
-    course: "",
-
-    yearLevel: "1st Year",
-    status: "Active",
-  });
+  const [form, setForm] = useState(emptyForm());
 
   // ============================================================
   // STUDENT ID GENERATOR
@@ -362,69 +323,6 @@ export default function Students({ onViewStudent }) {
   };
 
   // ============================================================
-  // OCR FILE CHANGE
-  // ============================================================
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-
-    if (!file) return;
-
-    setFileName(file.name);
-    setExtractError("");
-    setExtracting(true);
-
-    // Reset OCR fields before extracting
-    setForm((prev) => ({
-      ...prev,
-      first_name: "",
-      last_name: "",
-      middle_name: "",
-      birthdate: "",
-    }));
-
-    try {
-      const extracted =
-        await extractNameFromFile(file);
-
-      console.log(
-        "EXTRACTED DATA FOR FORM:",
-        extracted
-      );
-
-      setForm((prev) => ({
-        ...prev,
-
-        first_name:
-          extracted.first_name ||
-          prev.first_name,
-
-        last_name:
-          extracted.last_name ||
-          prev.last_name,
-
-        middle_name:
-          extracted.middle_name ||
-          prev.middle_name,
-
-        birthdate:
-          extracted.birthdate ||
-          prev.birthdate,
-      }));
-    } catch (err) {
-      console.error(
-        "OCR extraction failed:",
-        err
-      );
-
-      setExtractError(
-        "Could not extract information from document. Please fill in manually."
-      );
-    } finally {
-      setExtracting(false);
-    }
-  };
-
-  // ============================================================
   // INSERT NEW STUDENT
   // ============================================================
   const handleSubmit = async () => {
@@ -502,29 +400,7 @@ export default function Students({ onViewStudent }) {
       await fetchStudents();
 
       // Reset form
-      setForm({
-        enrollYear: String(currentYear),
-        idSuffix: "",
-
-        first_name: "",
-        last_name: "",
-        middle_name: "",
-        birthdate: "",
-
-        gender: "Female",
-        email: "",
-        contact: "",
-        address: "",
-
-        department: "",
-        course: "",
-
-        yearLevel: "1st Year",
-        status: "Active",
-      });
-
-      setFileName("");
-      setExtractError("");
+      setForm(emptyForm());
       setShowModal(false);
     } finally {
       setSubmitting(false);
@@ -958,54 +834,6 @@ export default function Students({ onViewStudent }) {
             </div>
 
             {/* ==================================================
-                OCR FILE ATTACHMENT
-            ================================================== */}
-            <label
-              className="modal-extract-btn"
-              style={{
-                display: "block",
-                marginBottom: "8px",
-                opacity:
-                  extracting
-                    ? 0.7
-                    : 1,
-                cursor:
-                  extracting
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-            >
-              {extracting
-                ? "Extracting information from document... (this may take a few minutes)"
-                : fileName
-                  ? `📄 ${fileName}`
-                  : "Extract Information — Attach a document"}
-
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                className="hidden"
-                disabled={extracting}
-                onChange={
-                  handleFileChange
-                }
-              />
-            </label>
-
-            {extractError && (
-              <p
-                style={{
-                  color: "red",
-                  fontSize: "0.8rem",
-                  marginBottom:
-                    "12px",
-                }}
-              >
-                {extractError}
-              </p>
-            )}
-
-            {/* ==================================================
                 STUDENT ID GENERATOR
             ================================================== */}
             <div
@@ -1150,16 +978,9 @@ export default function Students({ onViewStudent }) {
                   style={{
                     marginBottom: 0,
                   }}
-                  placeholder={
-                    extracting
-                      ? "Extracting..."
-                      : "First name"
-                  }
+                  placeholder="First name"
                   value={
                     form.first_name
-                  }
-                  disabled={
-                    extracting
                   }
                   onChange={(e) =>
                     handleFormChange(
@@ -1180,16 +1001,9 @@ export default function Students({ onViewStudent }) {
                   style={{
                     marginBottom: 0,
                   }}
-                  placeholder={
-                    extracting
-                      ? "Extracting..."
-                      : "Last name"
-                  }
+                  placeholder="Last name"
                   value={
                     form.last_name
-                  }
-                  disabled={
-                    extracting
                   }
                   onChange={(e) =>
                     handleFormChange(
@@ -1232,16 +1046,9 @@ export default function Students({ onViewStudent }) {
                   style={{
                     marginBottom: 0,
                   }}
-                  placeholder={
-                    extracting
-                      ? "Extracting..."
-                      : "Middle name"
-                  }
+                  placeholder="Middle name"
                   value={
                     form.middle_name
-                  }
-                  disabled={
-                    extracting
                   }
                   onChange={(e) =>
                     handleFormChange(
@@ -1550,8 +1357,7 @@ export default function Students({ onViewStudent }) {
                   handleSubmit
                 }
                 disabled={
-                  submitting ||
-                  extracting
+                  submitting
                 }
               >
                 {submitting

@@ -1,5 +1,7 @@
 import { useState, useCallback } from "react";
 import { SCANNER_URL, absoluteUrl } from "./scannerUtils";
+import { supabase } from "./supabaseClient";
+import { matchStudentFromOcr } from "./matchStudent";
 
 /**
  * Reusable document-scanning logic.
@@ -10,6 +12,24 @@ import { SCANNER_URL, absoluteUrl } from "./scannerUtils";
  * @param {function} options.onConfirmed 
  *                                       
  */
+
+// If OCR gave a label but no document_id, find the row in tbl_documents.
+// "Unknown" is treated as "nothing detected".
+async function resolveDocumentId(result) {
+  if (result.document_id) return result.document_id;
+
+  const name = (result.document_type || "").trim();
+  if (!name || name.toLowerCase() === "unknown") return null;
+
+  const { data } = await supabase
+    .from("tbl_documents")
+    .select("document_id")
+    .ilike("document_name", name)
+    .limit(2);
+
+  return data?.length === 1 ? data[0].document_id : null;
+}
+
 export default function useDocumentScanner({
   onScanned,
   onConfirmed,
@@ -145,33 +165,86 @@ export default function useDocumentScanner({
         throw new Error(data?.message || "Failed to scan the document.");
       }
 
-      const fileUrl = absoluteUrl(data.file_url);
+      console.log("[RAW SCAN RESPONSE]", data);   // shows what the scanner service forwards
 
-      // Keep the entire scanner response, normalising property names
-      const result = {
-        ...data,
-        file_url: fileUrl,
+const fileUrl = absoluteUrl(data.file_url);
 
-        document_type:
-          data.document_type ||
-          data.detected_document_type ||
-          data.detectedDocType ||
-          "",
+const result = {
+  ...data,
+  file_url: fileUrl,
 
-        document_type_key:
-          data.document_type_key || data.documentTypeKey || "",
+  document_type:
+    data.document_type || data.detected_document_type || data.detectedDocType || "",
+  document_type_key: data.document_type_key || data.documentTypeKey || "",
+  document_type_confidence:
+    data.document_type_confidence ?? data.documentTypeConfidence ?? null,
+  document_type_matches:
+    data.document_type_matches || data.documentTypeMatches || [],
+  document_type_suggestions: data.document_type_suggestions || [],
 
-        document_type_confidence:
-          data.document_type_confidence ??
-          data.documentTypeConfidence ??
-          null,
+  document_id: data.document_id ?? data.documentId ?? null,
 
-        document_type_matches:
-          data.document_type_matches || data.documentTypeMatches || [],
-      };
+  first_name: data.first_name ?? data.firstName ?? "",
+  middle_name: data.middle_name ?? data.middleName ?? "",
+  last_name: data.last_name ?? data.lastName ?? "",
+};
 
-      // Let the host page react (e.g. mark a credential row as Pending)
-      onScanned?.(credential, result);
+
+      // Auto-fill: document type ID + student ID
+      try {
+        result.document_id = await resolveDocumentId(result);
+
+        // Send all available name information to the matcher.
+        // The OCR may return the name in Last-First-Middle order.
+        const fullName =
+          result.full_name ||
+          result.fullName ||
+          result.student_name ||
+          result.studentName ||
+          [
+            result.first_name,
+            result.middle_name,
+            result.last_name,
+          ]
+            .filter(Boolean)
+            .join(" ");
+
+        if (fullName.trim()) {
+          const match = await matchStudentFromOcr({
+            first: result.first_name,
+            middle: result.middle_name,
+            last: result.last_name,
+            fullName,
+          });
+
+          result.matched_student = match.student;
+          result.student_candidates = match.candidates || [];
+
+          // Keep the actual database student ID available to the UI.
+          result.matched_student_id =
+            match.student?.student_id ?? null;
+
+          console.log("[OCR NAME]", fullName);
+          console.log("[STUDENT MATCH]", match.student);
+          console.log("[STUDENT CANDIDATES]", match.candidates);
+        } else {
+          result.matched_student = null;
+          result.student_candidates = [];
+          result.matched_student_id = null;
+
+          console.warn(
+            "OCR returned no usable name for student matching."
+          );
+        }
+      } catch (e) {
+        console.error("Auto-fill lookup failed:", e);
+        result.matched_student = null;
+        result.student_candidates = [];
+        result.matched_student_id = null;
+      }
+
+
+onScanned?.(credential, result);
 
       setOcrResult(result);
       setShowScanModal(false);

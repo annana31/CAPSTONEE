@@ -36,18 +36,15 @@
 
 /* =========================================================
    MAIN MODAL
+   Height now follows the content instead of filling the screen
    ========================================================= */
 
 .ocr-overlay .ocr-card {
   width: 100% !important;
 
-  max-width: 1280px !important;
+  max-width: 860px !important;
 
-  /*
-   * Use almost the entire available screen height.
-   * This prevents the containers from looking compressed.
-   */
-  height: calc(100vh - 32px) !important;
+  height: auto !important;
   max-height: calc(100vh - 32px) !important;
 
   display: flex !important;
@@ -85,14 +82,12 @@
 
 .ocr-header {
   display: flex;
-
   align-items: center;
-
   justify-content: space-between;
 
   gap: 20px;
 
-  padding: 18px 28px 17px;
+  padding: 14px 22px 13px;
 
   background:
     linear-gradient(
@@ -107,28 +102,17 @@
 }
 
 
-/* =========================================================
-   TITLE
-   ========================================================= */
-
 .ocr-title {
   margin: 0;
 
   color: #ffffff;
 
   font-size: 18px;
-
   font-weight: 800;
-
   line-height: 1.25;
-
   letter-spacing: -0.25px;
 }
 
-
-/* =========================================================
-   SUBTITLE
-   ========================================================= */
 
 .ocr-sub {
   margin: 5px 0 0;
@@ -136,9 +120,7 @@
   color: rgba(255, 255, 255, 0.60);
 
   font-size: 12px;
-
   font-weight: 500;
-
   line-height: 1.5;
 }
 
@@ -149,7 +131,6 @@
 
 .ocr-complete-badge {
   display: flex;
-
   align-items: center;
 
   gap: 7px;
@@ -159,13 +140,11 @@
   border-radius: 999px;
 
   background: rgba(34, 197, 94, 0.10);
-
   border: 1px solid rgba(34, 197, 94, 0.18);
 
   color: #4ade80;
 
   font-size: 10px;
-
   font-weight: 800;
 
   white-space: nowrap;
@@ -174,7 +153,6 @@
 
 .ocr-complete-dot {
   width: 6px;
-
   height: 6px;
 
   flex-shrink: 0;
@@ -183,29 +161,29 @@
 
   background: #4ade80;
 
-  box-shadow:
-    0 0 7px rgba(74, 222, 128, 0.65);
+  box-shadow: 0 0 7px rgba(74, 222, 128, 0.65);
 }
 
 
 /* =========================================================
    BODY
+   Columns sit at the top and size to their own content
    ========================================================= */
 
 .ocr-body {
-  flex: 1;
+  flex: 0 1 auto;
 
   display: grid;
 
   grid-template-columns:
-    minmax(0, 1fr)
-    minmax(0, 1fr);
+    minmax(0, 1.1fr)
+    minmax(0, 0.9fr);
 
   align-items: stretch;
 
-  gap: 20px;
+  gap: 16px;
 
-  padding: 20px 26px;
+  padding: 16px 20px;
 
   background-color: #0b123d;
 
@@ -224,30 +202,26 @@
 
 .ocr-body > .ocr-panel:first-child {
   display: flex;
-
   flex-direction: column;
 
   min-height: 0;
 
-  height: 100%;
+  height: auto;
 }
 
 
 /* =========================================================
    RIGHT COLUMN
-   DETECTED INFORMATION + OCR TEXT
+   DETECTED INFORMATION
    ========================================================= */
 
 .ocr-body > div:last-child {
   display: flex;
-
   flex-direction: column;
 
   gap: 18px;
 
   min-width: 0;
-
-  min-height: 0;
 
   height: 100%;
 }
@@ -258,7 +232,7 @@
    ========================================================= */
 
 .ocr-panel {
-  padding: 20px;
+  padding: 16px;
 
   box-sizing: border-box;
 
@@ -270,8 +244,7 @@
 
   border-radius: 13px;
 
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
 
@@ -281,9 +254,7 @@
 
 .ocr-panel-header {
   display: flex;
-
   align-items: center;
-
   justify-content: space-between;
 
   gap: 12px;
@@ -298,11 +269,9 @@
   color: #111827;
 
   font-size: 12px;
-
   font-weight: 800;
 
   text-transform: uppercase;
-
   letter-spacing: 0.06em;
 }
 
@@ -313,9 +282,7 @@
 
 .ocr-file-type-badge {
   display: inline-flex;
-
   align-items: center;
-
   justify-content: center;
 
   padding: 5px 9px;
@@ -323,17 +290,14 @@
   border-radius: 6px;
 
   background: rgba(30, 64, 175, 0.10);
-
   border: 1px solid rgba(30, 64, 175, 0.18);
 
   color: #1d4ed8;
 
   font-size: 9px;
-
   font-weight: 800;
 
   text-transform: uppercase;
-
   letter-spacing: 0.04em;
 
   white-space: nowrap;
@@ -342,28 +306,22 @@
 
 /* =========================================================
    FILE PREVIEW
+   Fixed, reasonable height instead of filling the column
    ========================================================= */
 
 .ocr-preview-box {
-  /*
-   * Important:
-   * Let the preview expand to fill the remaining
-   * vertical space of the left panel.
-   */
-  flex: 1;
+  flex: none;
 
   width: 100%;
 
-  min-height: 0;
+  height: min(44vh, 340px) !important;
 
   padding: 10px;
 
   box-sizing: border-box;
 
   display: flex;
-
   align-items: center;
-
   justify-content: center;
 
   background: #f8fafc;
@@ -378,17 +336,13 @@
 }
 
 
-/* =========================================================
-   IMAGE PREVIEW
-   ========================================================= */
+/* IMAGE PREVIEW */
 
 .ocr-preview-image {
   width: 100%;
-
   height: 100%;
 
   max-width: 100%;
-
   max-height: 100%;
 
   display: block;
@@ -399,18 +353,14 @@
 
   background: #ffffff;
 
-  box-shadow:
-    0 4px 16px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
 }
 
 
-/* =========================================================
-   PDF PREVIEW
-   ========================================================= */
+/* PDF PREVIEW */
 
 .ocr-preview-iframe {
   width: 100%;
-
   height: 100%;
 
   border: none;
@@ -421,21 +371,15 @@
 }
 
 
-/* =========================================================
-   NO PREVIEW
-   ========================================================= */
+/* NO PREVIEW */
 
 .ocr-no-preview {
   display: flex;
-
   flex-direction: column;
-
   align-items: center;
-
   justify-content: center;
 
   width: 100%;
-
   height: 100%;
 
   text-align: center;
@@ -448,7 +392,6 @@
   color: #334155;
 
   font-size: 13px;
-
   font-weight: 700;
 }
 
@@ -468,9 +411,7 @@
 
 .ocr-meta-row {
   display: flex;
-
   align-items: center;
-
   justify-content: space-between;
 
   gap: 15px;
@@ -487,7 +428,6 @@
   color: #64748b;
 
   font-size: 11px;
-
   font-weight: 500;
 
   white-space: nowrap;
@@ -498,15 +438,12 @@
   max-width: 68%;
 
   overflow: hidden;
-
   text-overflow: ellipsis;
-
   white-space: nowrap;
 
   color: #111827;
 
   font-size: 11px;
-
   font-weight: 700;
 
   text-align: right;
@@ -517,13 +454,12 @@
    DETECTED INFORMATION PANEL
    ========================================================= */
 
-/*
- * The first panel on the right should use only the
- * amount of space it needs.
- */
-
 .ocr-body > div:last-child > .ocr-panel:first-child {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+
+  display: flex;
+
+  flex-direction: column;
 }
 
 
@@ -544,18 +480,14 @@
   color: #475569;
 
   font-size: 10px;
-
   font-weight: 800;
 
   text-transform: uppercase;
-
   letter-spacing: 0.07em;
 }
 
 
-/* =========================================================
-   DOCUMENT TYPE SELECT
-   ========================================================= */
+/* DOCUMENT TYPE SELECT */
 
 .ocr-field-select {
   width: 100%;
@@ -575,7 +507,6 @@
   color: #111827;
 
   font-size: 13px;
-
   font-weight: 700;
 
   outline: none;
@@ -583,7 +514,6 @@
   cursor: pointer;
 
   appearance: none;
-
   -webkit-appearance: none;
 
   background-image:
@@ -610,8 +540,7 @@
 .ocr-field-select:focus {
   border-color: #1e40af;
 
-  box-shadow:
-    0 0 0 3px rgba(30, 64, 175, 0.12);
+  box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.12);
 }
 
 
@@ -629,9 +558,7 @@
 }
 
 
-/* =========================================================
-   OCR HINT
-   ========================================================= */
+/* OCR HINT */
 
 .ocr-field-hint {
   margin: 6px 0 0;
@@ -639,7 +566,6 @@
   color: #64748b;
 
   font-size: 10px;
-
   line-height: 1.4;
 }
 
@@ -650,9 +576,7 @@
 
 .ocr-info-row {
   display: flex;
-
   align-items: center;
-
   justify-content: space-between;
 
   gap: 20px;
@@ -674,7 +598,6 @@
   color: #64748b;
 
   font-size: 12px;
-
   font-weight: 500;
 
   white-space: nowrap;
@@ -685,15 +608,12 @@
   max-width: 68%;
 
   overflow: hidden;
-
   text-overflow: ellipsis;
-
   white-space: nowrap;
 
   color: #111827;
 
   font-size: 12px;
-
   font-weight: 800;
 
   text-align: right;
@@ -701,155 +621,46 @@
 
 
 /* =========================================================
-   CONFIDENCE
+   STUDENT CANDIDATE BUTTONS
+   ("No confident match. Is it one of these?")
    ========================================================= */
 
-.ocr-confidence-value {
-  display: inline-flex;
-
-  align-items: center;
-
-  justify-content: center;
-
-  padding: 5px 9px;
-
-  border-radius: 5px;
-
-  background: rgba(22, 163, 74, 0.10);
-
-  border: 1px solid rgba(22, 163, 74, 0.18);
-
-  color: #15803d;
-
-  font-size: 10px;
-
-  font-weight: 800;
-
-  white-space: nowrap;
-}
-
-
-.ocr-match-text {
-  font-weight: 700;
-}
-
-
-/* =========================================================
-   EXTRACTED OCR PANEL
-   ========================================================= */
-
-/*
- * This is the important part:
- * The OCR panel expands to consume the remaining
- * vertical space on the right side.
- */
-
-.ocr-body > div:last-child > .ocr-extracted-panel {
-  flex: 1 1 auto;
-
-  min-height: 0;
-
-  display: flex;
-
-  flex-direction: column;
-}
-
-
-/* =========================================================
-   EXTRACTED OCR HEADER
-   ========================================================= */
-
-.ocr-extracted-header {
-  display: flex;
-
-  align-items: center;
-
-  justify-content: space-between;
-
-  gap: 12px;
-
-  margin-bottom: 10px;
-
-  flex-shrink: 0;
-}
-
-
-.ocr-extracted-label {
-  color: #111827;
-
-  font-size: 12px;
-
-  font-weight: 800;
-
-  text-transform: uppercase;
-
-  letter-spacing: 0.06em;
-}
-
-
-.ocr-raw-output-tag {
-  padding: 4px 7px;
-
-  border-radius: 5px;
-
-  background: #f1f5f9;
-
-  border: 1px solid #e2e8f0;
-
-  color: #64748b;
-
-  font-size: 8px;
-
-  font-weight: 800;
-
-  text-transform: uppercase;
-
-  letter-spacing: 0.05em;
-
-  white-space: nowrap;
-}
-
-
-/* =========================================================
-   EXTRACTED OCR TEXT
-   ========================================================= */
-
-.ocr-extracted-text {
-  flex: 1;
-
-  min-height: 0;
+.ocr-candidate-btn {
+  display: block;
 
   width: 100%;
 
-  padding: 14px;
+  margin-top: 6px;
+
+  padding: 10px 12px;
 
   box-sizing: border-box;
 
-  overflow-y: auto;
+  text-align: left;
 
-  white-space: pre-wrap;
-
-  word-break: break-word;
+  border: 1px solid #cbd5e1;
 
   border-radius: 8px;
 
   background: #ffffff;
 
-  border: 1px solid #dbe2ea;
-
   color: #111827;
 
-  font-family:
-    "Consolas",
-    "Courier New",
-    monospace;
+  font-size: 12px;
+  font-weight: 700;
 
-  font-size: 11px;
+  cursor: pointer;
 
-  line-height: 1.65;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
 
-  box-shadow:
-    inset 0 1px 3px rgba(15, 23, 42, 0.04);
+
+.ocr-candidate-btn:hover {
+  background: #f1f5f9;
+
+  border-color: #1e40af;
 }
 
 
@@ -857,19 +668,16 @@
    SCROLLBARS
    ========================================================= */
 
-.ocr-extracted-text::-webkit-scrollbar,
 .ocr-body::-webkit-scrollbar {
   width: 6px;
 }
 
 
-.ocr-extracted-text::-webkit-scrollbar-track,
 .ocr-body::-webkit-scrollbar-track {
   background: transparent;
 }
 
 
-.ocr-extracted-text::-webkit-scrollbar-thumb,
 .ocr-body::-webkit-scrollbar-thumb {
   background: #cbd5e1;
 
@@ -877,7 +685,6 @@
 }
 
 
-.ocr-extracted-text::-webkit-scrollbar-thumb:hover,
 .ocr-body::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
@@ -889,14 +696,12 @@
 
 .ocr-footer {
   display: flex;
-
   align-items: center;
-
   justify-content: space-between;
 
   gap: 20px;
 
-  padding: 15px 24px;
+  padding: 12px 20px;
 
   background: rgba(6, 12, 43, 0.92);
 
@@ -906,24 +711,16 @@
 }
 
 
-/* =========================================================
-   FOOTER ACTIONS
-   ========================================================= */
-
 .ocr-footer-actions {
   display: flex;
-
   align-items: center;
-
   justify-content: flex-end;
 
   gap: 10px;
 }
 
 
-/* =========================================================
-   CANCEL BUTTON
-   ========================================================= */
+/* CANCEL BUTTON */
 
 .ocr-cancel-btn {
   height: 42px;
@@ -941,7 +738,6 @@
   color: rgba(255, 255, 255, 0.78);
 
   font-size: 12px;
-
   font-weight: 700;
 
   cursor: pointer;
@@ -962,9 +758,7 @@
 }
 
 
-/* =========================================================
-   SAVE BUTTON
-   ========================================================= */
+/* SAVE BUTTON */
 
 .ocr-save-btn {
   height: 42px;
@@ -982,13 +776,11 @@
   color: #10152b;
 
   font-size: 12px;
-
   font-weight: 800;
 
   cursor: pointer;
 
-  box-shadow:
-    0 5px 15px rgba(230, 168, 23, 0.16);
+  box-shadow: 0 5px 15px rgba(230, 168, 23, 0.16);
 
   transition:
     background 0.18s ease,
@@ -1003,8 +795,7 @@
 
   border-color: #f0b72a;
 
-  box-shadow:
-    0 7px 20px rgba(230, 168, 23, 0.22);
+  box-shadow: 0 7px 20px rgba(230, 168, 23, 0.22);
 
   transform: translateY(-1px);
 }
@@ -1015,9 +806,7 @@
 }
 
 
-/* =========================================================
-   DISABLED BUTTONS
-   ========================================================= */
+/* DISABLED BUTTONS */
 
 .ocr-cancel-btn:disabled,
 .ocr-save-btn:disabled {
@@ -1031,12 +820,11 @@
 }
 
 
-/* =========================================================
-   FOCUS
-   ========================================================= */
+/* FOCUS */
 
 .ocr-cancel-btn:focus-visible,
 .ocr-save-btn:focus-visible,
+.ocr-candidate-btn:focus-visible,
 .ocr-field-select:focus-visible {
   outline: 2px solid rgba(230, 168, 23, 0.70);
 
@@ -1052,8 +840,6 @@
 
   .ocr-overlay .ocr-card {
     max-width: 94vw !important;
-
-    height: calc(100vh - 32px) !important;
   }
 
   .ocr-body {
@@ -1061,21 +847,13 @@
   }
 
   .ocr-preview-box {
-    flex: none;
-
-    height: 420px;
-
-    min-height: 420px;
+    height: 300px !important;
   }
 
   .ocr-body > div:last-child {
-    height: auto;
-
     gap: 14px;
-  }
 
-  .ocr-body > div:last-child > .ocr-extracted-panel {
-    min-height: 300px;
+    height: auto;
   }
 
 }
@@ -1093,8 +871,6 @@
 
 
   .ocr-overlay .ocr-card {
-    height: calc(100vh - 20px) !important;
-
     max-height: calc(100vh - 20px) !important;
 
     border-radius: 14px !important;
@@ -1131,9 +907,7 @@
 
 
   .ocr-preview-box {
-    height: 320px;
-
-    min-height: 320px;
+    height: 260px !important;
   }
 
 

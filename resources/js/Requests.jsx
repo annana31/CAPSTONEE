@@ -583,9 +583,12 @@ export default function Requests() {
         </select>
       </div>
 
-      {/* Table */}
-      <div className="req-table-wrapper">
-        <table className="req-table">
+      {/* Table (scrolls horizontally on smaller screens) */}
+      <div
+        className="req-table-wrapper"
+        style={{ overflowX: "auto", maxWidth: "100%" }}
+      >
+        <table className="req-table" style={{ minWidth: "1100px" }}>
           <thead>
             <tr className="req-thead">
               <th className="req-th-first">Request ID</th>

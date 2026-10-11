@@ -3,7 +3,9 @@ import { supabase } from "./supabaseClient";
 import { useAuth } from "./AuthContext"; // RBAC
 import DocumentScanner from "./DocumentScanner.jsx";
 import useDocumentScanner from "./useDocumentScanner";
+import { matchStudentFromOcr } from "./matchStudent";
 import "./styles/Dashboard.css";
+
 
 const ROWS_PER_PAGE = 10;
 
@@ -19,6 +21,24 @@ const formatYear = (y) => {
   return `${n}${suffix} Year`;
 };
 
+// Optional: map OCR classifier labels to the exact tbl_documents.document_name.
+// Add entries here if the OCR label differs from what is stored in the database.
+const DOCUMENT_TYPE_MAP = {
+  // "TOR": "Transcript of Records",
+  // "PSA": "PSA Birth Certificate",
+};
+
+// Splits "Last, First Middle" or "First Middle Last" into { last, first }
+const splitName = (fullName = "") => {
+  const name = fullName.trim();
+  if (name.includes(",")) {
+    const [last, rest] = name.split(",").map((s) => s.trim());
+    return { last, first: (rest || "").split(" ")[0] };
+  }
+  const parts = name.split(/\s+/);
+  return { last: parts[parts.length - 1], first: parts[0] };
+};
+
 export default function Dashboard({
   staffName,
   activePage,
@@ -29,7 +49,11 @@ export default function Dashboard({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const { canAccess } = useAuth(); // RBAC
+  // RBAC (adjust `user` if your AuthContext exposes the staff id differently)
+  const { canAccess, staffId, staffName: authStaffName } = useAuth();
+
+  // Bump this to re-fetch the stat cards after a document is saved
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // ── SCANNER (reusable hook) ──
   const scanner = useDocumentScanner({
@@ -37,22 +61,101 @@ export default function Dashboard({
       console.log("Dashboard scan complete:", result.filename);
     },
 
+    // Called when the registrar confirms/saves in OCRConfirmation.
+    // Stores the document in the matched student's profile.
+    
+
     onConfirmed: async ({
       studentId,
       studentName,
+      ocrName,
+      documentId,
       documentType,
       fileName,
       fileUrl,
     }) => {
-      // Save the confirmed document to your database/API here.
-      // OCRConfirmation passes the (possibly corrected) student and type.
-      console.log("Dashboard OCR confirmed:", {
-        studentId,
-        studentName,
-        documentType,
-        fileName,
-        fileUrl,
-      });
+
+      try {
+        // 1. Resolve the student
+      let sid = studentId;
+
+      if (!sid) {
+        const match = await matchStudentFromOcr(
+          ocrName ?? {
+            ...splitName(studentName),
+            middle: "",
+          }
+        );
+
+      if (match.student) {
+        sid = match.student.student_id;
+      }
+    }
+
+      if (!sid) {
+        throw new Error(
+          "No unique student match. Please select the student in the confirmation screen."
+        );
+      }
+
+      console.log("[AUTH STAFF ID]", staffId);
+      console.log("[AUTH STAFF NAME]", authStaffName);
+
+        // 2. Resolve document_id from the tbl_documents lookup
+        // 2. Resolve document_id
+// Prefer the document ID returned by OCR / confirmation.
+// Fall back to looking it up by document name.
+    let docId = documentId;
+
+      if (!docId) {
+        const docName = DOCUMENT_TYPE_MAP[documentType] ?? documentType;
+
+        const { data: doc, error: docErr } = await supabase
+          .from("tbl_documents")
+          .select("document_id")
+          .ilike("document_name", docName)
+          .maybeSingle();
+
+        if (docErr) throw docErr;
+
+        docId = doc?.document_id;
+      }
+
+      if (!docId) {
+        throw new Error(`Unknown document type: ${documentType}`);
+      }
+
+        // 3. Save to the same table the Student Profile reads from
+        const { error: insertErr } = await supabase
+  .from("tbl_student_documents")
+  .insert({
+    student_id: sid,
+    document_id: docId,
+    document_name: fileName,
+    file_path: fileUrl,
+    uploaded_by: staffId,
+    date_uploaded: new Date().toISOString(),
+    status: "Active",
+    remarks: "Verified",
+  });
+
+if (insertErr) throw insertErr;
+
+setRefreshKey((k) => k + 1);
+
+if (!staffId) {
+  throw new Error(
+    "Unable to identify the logged-in staff. Please check how staffId is passed to AuthProvider."
+  );
+}
+      
+} catch (err) {
+  console.error("Save scanned document failed:", err);
+
+  // Keep the confirmation dialog open if saving fails.
+  throw err;
+}
+
     },
   });
 
@@ -130,32 +233,68 @@ export default function Dashboard({
     };
 
     fetchStats();
-  }, []);
+  }, [refreshKey]);
 
   // ── BACKEND: Fetch newest students (server-side pagination) ──
+  
+  // ── BACKEND: Fetch newest students without saved documents ──
   useEffect(() => {
     const fetchStudents = async () => {
       setLoadingStudents(true);
 
-      const from = (currentPage - 1) * ROWS_PER_PAGE;
-      const to = from + ROWS_PER_PAGE - 1;
-
       try {
-        const { data, count, error } = await supabase
-          .from("tbl_student")
-          .select(
-            `student_id, first_name, middle_name, last_name, year_level,
-             tbl_college ( college_name ),
-             tbl_program ( program_name )`,
-            { count: "exact" }
-          )
-          .order("student_id", { ascending: false })
-          .range(from, to);
+        // Fetch students and the students who already have saved documents.
+        const [studentRes, documentRes] = await Promise.all([
+          supabase
+            .from("tbl_student")
+            .select(`
+              student_id,
+              first_name,
+              middle_name,
+              last_name,
+              year_level,
+              tbl_college ( college_name ),
+              tbl_program ( program_name )
+            `)
+            .order("student_id", { ascending: false }),
 
-        if (error) throw error;
+          supabase
+            .from("tbl_student_documents")
+            .select("student_id"),
+        ]);
+
+        if (studentRes.error) throw studentRes.error;
+        if (documentRes.error) throw documentRes.error;
+
+        // Build a set of student IDs that already have saved documents.
+        const studentsWithDocuments = new Set(
+          (documentRes.data ?? []).map((doc) => String(doc.student_id))
+        );
+
+        // Only display students who do not yet have a saved document.
+        const eligibleStudents = (studentRes.data ?? []).filter(
+          (student) =>
+            !studentsWithDocuments.has(String(student.student_id))
+        );
+
+        const total = eligibleStudents.length;
+        const totalPages = Math.max(1, Math.ceil(total / ROWS_PER_PAGE));
+        const safePage = Math.min(currentPage, totalPages);
+
+        // If filtering changes the number of pages, keep the page valid.
+        if (safePage !== currentPage) {
+          setCurrentPage(safePage);
+        }
+
+        // Apply pagination AFTER filtering.
+        const from = (safePage - 1) * ROWS_PER_PAGE;
+        const pageStudents = eligibleStudents.slice(
+          from,
+          from + ROWS_PER_PAGE
+        );
 
         setStudents(
-          (data ?? []).map((s) => ({
+          pageStudents.map((s) => ({
             id: s.student_id,
             name: [s.first_name, s.middle_name, s.last_name]
               .filter(Boolean)
@@ -165,17 +304,20 @@ export default function Dashboard({
             year: formatYear(s.year_level),
           }))
         );
-        setTotalStudents(count ?? 0);
+
+        setTotalStudents(total);
       } catch (err) {
-        console.error("Error fetching students:", err);
+        console.error("Error fetching new students:", err);
         setStudents([]);
+        setTotalStudents(0);
       } finally {
         setLoadingStudents(false);
       }
     };
 
     fetchStudents();
-  }, [currentPage]);
+  }, [currentPage, refreshKey]);
+
 
   const totalPages = Math.max(1, Math.ceil(totalStudents / ROWS_PER_PAGE));
   const showingFrom =

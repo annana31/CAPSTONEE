@@ -25,8 +25,6 @@ const initialStudent = {
   birthdate: "",
   gender: "",
   email: "",
-  contact_number: "",
-  address: "",
   college_id: "",
   program_id: "",
   year_level: "",
@@ -122,32 +120,74 @@ export default function StudentProfile({ studentId, onBack }) {
 
     // Called when the OCR confirmation is saved
     onConfirmed: async (
-      { studentName, documentType, fileName, fileUrl },
-      selectedCredential
-    ) => {
-      /*
-       * For now, update the local credential list.
-       * Connect the real database/API save here when ready.
-       */
-      setCredentials((prev) =>
-        prev.map((cred) => {
-          if (
-            cred.name === documentType ||
-            cred.name === selectedCredential?.name
-          ) {
-            return {
+  {
+    documentId,
+    documentType,
+    fileName,
+    fileUrl,
+  },
+  selectedCredential
+) => {
+  try {
+    const sid = student.student_id;
+
+    if (!sid) {
+      throw new Error("No student is selected.");
+    }
+
+    let docId = documentId;
+
+    if (!docId && documentType) {
+      const { data, error } = await supabase
+        .from("tbl_documents")
+        .select("document_id")
+        .ilike("document_name", documentType)
+        .maybeSingle();
+
+      if (error) throw error;
+      docId = data?.document_id;
+    }
+
+    if (!docId) {
+      throw new Error(
+        "Document type was not identified. Please select a document type."
+      );
+    }
+
+    const { error } = await supabase
+      .from("tbl_student_documents")
+      .insert({
+        student_id: sid,
+        document_id: docId,
+        document_name: fileName,
+        file_path: fileUrl,
+        date_uploaded: new Date().toISOString(),
+        status: "Active",
+      });
+
+    if (error) throw error;
+
+    setCredentials((prev) =>
+      prev.map((cred) =>
+        cred.name === documentType ||
+        cred.name === selectedCredential?.name
+          ? {
               ...cred,
-              name: documentType || cred.name,
               date: today(),
-              status: "Pending",
+              status: "Active",
               file: fileName || cred.file,
               file_url: fileUrl || cred.file_url,
-            };
-          }
-          return cred;
-        })
-      );
-    },
+            }
+          : cred
+      )
+    );
+
+    alert("Document saved successfully.");
+  } catch (err) {
+    console.error("Save scanned document failed:", err);
+    alert(err.message || "Failed to save the scanned document.");
+  }
+},
   });
 
   // ============================================================
@@ -275,8 +315,6 @@ export default function StudentProfile({ studentId, onBack }) {
         birthdate: editForm.birthdate || null,
         gender: editForm.gender || null,
         email: editForm.email || null,
-        contact_number: editForm.contact_number || null,
-        address: editForm.address || null,
         college_id: editForm.college_id ? Number(editForm.college_id) : null,
         program_id: editForm.program_id ? Number(editForm.program_id) : null,
         year_level: editForm.year_level ? Number(editForm.year_level) : null,
@@ -449,13 +487,11 @@ export default function StudentProfile({ studentId, onBack }) {
           <div className="profile-info-grid">
             {[
               ["Email", student.email],
-              ["Phone", student.contact_number],
               ["Gender", student.gender],
               ["Birthdate", student.birthdate],
               ["Year Level", yearName],
               ["College", collegeName],
               ["Program", programName],
-              ["Address", student.address],
             ].map(([label, value]) => (
               <div key={label}>
                 <p className="profile-info-label">{label}</p>
@@ -678,29 +714,6 @@ export default function StudentProfile({ studentId, onBack }) {
 
             <div className="edit-grid">
               <div>
-                <label className="edit-label">Email</label>
-                <input
-                  className="edit-input"
-                  type="email"
-                  value={editForm.email || ""}
-                  onChange={(e) => handleEditChange("email", e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="edit-label">Phone</label>
-                <input
-                  className="edit-input"
-                  value={editForm.contact_number || ""}
-                  onChange={(e) =>
-                    handleEditChange("contact_number", e.target.value)
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="edit-grid">
-              <div>
                 <label className="edit-label">Gender</label>
                 <select
                   className="edit-select"
@@ -801,11 +814,12 @@ export default function StudentProfile({ studentId, onBack }) {
               </div>
             </div>
 
-            <label className="edit-label">Address</label>
+            <label className="edit-label">Email</label>
             <input
               className="edit-input"
-              value={editForm.address || ""}
-              onChange={(e) => handleEditChange("address", e.target.value)}
+              type="email"
+              value={editForm.email || ""}
+              onChange={(e) => handleEditChange("email", e.target.value)}
             />
 
             <div className="edit-footer">

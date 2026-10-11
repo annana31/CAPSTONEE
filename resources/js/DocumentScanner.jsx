@@ -312,18 +312,23 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
           OCR CONFIRMATION
           ======================================================== */}
 
-      {showOCRConfirmation && ocrResult && (
-        <OCRConfirmation
-          studentId={studentId ?? ""}
-          studentName={studentName ?? ""}
-          fileName={ocrResult.filename || ""}
-          fileUrl={ocrResult.file_url || ""}
-          detectedDocType={ocrResult.document_type || ""}
-          documentTypeConfidence={ocrResult.document_type_confidence ?? null}
-          onCancel={cancelOCR}
-          onSave={saveOCR}
-        />
-      )}
+      
+{showOCRConfirmation && ocrResult && (
+  <OCRConfirmation
+    ocrResult={ocrResult}
+    studentId={studentId ?? ""}
+    studentName={studentName ?? ""}
+    fileName={ocrResult.filename || ""}
+    fileUrl={ocrResult.file_url || ""}
+    detectedDocType={ocrResult.document_type || ""}
+    documentTypeConfidence={
+      ocrResult.document_type_confidence ?? null
+    }
+    onCancel={cancelOCR}
+    onSave={saveOCR}
+  />
+)}
+
     </>
   );
 }

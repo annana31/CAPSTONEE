@@ -1,68 +1,13 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { supabase } from "./supabaseClient";
 import "./styles/OCRConfirmation.css";
-
-const documentTypes = [
-  "Birth Certificate",
-  "Form 137",
-  "Form 138",
-  "Good Moral",
-  "Grades",
-  "Transcript of Records",
-  "Leave of Absence",
-  "Withdrawal",
-];
 
 const isPdf = (url) => /\.pdf(\?|#|$)/i.test(url || "");
 
-/*
- * Convert different OCR document-type formats
- * into the exact names used by the system.
- *
- * Examples:
- * birth_certificate -> Birth Certificate
- * Birth Certificate -> Birth Certificate
- * form_137 -> Form 137
- * FORM 137 -> Form 137
- */
-const normalizeDocumentType = (value) => {
-  if (!value) return "";
-
-  const normalized = String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
-
-  const mappings = {
-    "birth certificate": "Birth Certificate",
-    birthcertificate: "Birth Certificate",
-
-    "form 137": "Form 137",
-    form137: "Form 137",
-
-    "form 138": "Form 138",
-    form138: "Form 138",
-
-    "good moral": "Good Moral",
-    goodmoral: "Good Moral",
-
-    grades: "Grades",
-
-    "transcript of records": "Transcript of Records",
-    tor: "Transcript of Records",
-
-    "leave of absence": "Leave of Absence",
-    loa: "Leave of Absence",
-
-    withdrawal: "Withdrawal",
-  };
-
-  return mappings[normalized] || "";
-};
-
 export default function OCRConfirmation({
-  studentId = "",
+  ocrResult = null,          // NEW: the whole scan result
+  studentId = "",            // still used by the Student Profile scan
   studentName = "",
   fileName = "",
   fileUrl = "",
@@ -71,46 +16,117 @@ export default function OCRConfirmation({
   onCancel,
   onSave,
 }) {
-  /*
-   * Automatically initialize the document type
-   * using the OCR classification result.
-   */
-  const [documentType, setDocumentType] = useState(
-    normalizeDocumentType(detectedDocType)
-  );
+  const [docs, setDocs] = useState([]);
+  const [docsError, setDocsError] = useState("");
+  const [documentId, setDocumentId] = useState("");
+  const [suggested, setSuggested] = useState(false);
 
+  const [pickedStudent, setPickedStudent] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  /*
-   * If the OCR result changes, update the dropdown.
-   */
-  useEffect(() => {
-    setDocumentType(
-      normalizeDocumentType(detectedDocType)
-    );
-  }, [detectedDocType]);
+  const ocrName = {
+    first: ocrResult?.first_name || "",
+    middle: ocrResult?.middle_name || "",
+    last: ocrResult?.last_name || "",
+  };
+  const ocrFullName = [ocrName.first, ocrName.middle, ocrName.last]
+    .filter(Boolean).join(" ");
+  const candidates = ocrResult?.student_candidates || [];
 
-  const handleSave = async () => {
-    if (!documentType) {
+  // 1. Load the real document types (value = document_id)
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from("tbl_documents")
+        .select("document_id, document_name")
+        .order("document_name");
+      if (error || !data?.length) {
+        setDocsError("Could not load document types from the database.");
+        return;
+      }
+      setDocs(data);
+    })();
+  }, []);
+
+  // 2. Auto-select the document type once the list is loaded
+  useEffect(() => {
+    if (!docs.length) return;
+
+    const label = (ocrResult?.document_type || detectedDocType || "")
+      .trim().toLowerCase();
+
+    // a) ID straight from the classifier
+    let match = ocrResult?.document_id
+      ? docs.find((d) => d.document_id === ocrResult.document_id)
+      : null;
+
+    // b) exact name match
+    if (!match && label && label !== "unknown") {
+      match = docs.find((d) => d.document_name.toLowerCase() === label);
+    }
+
+    if (match) {
+      setDocumentId(String(match.document_id));
+      setSuggested(false);
       return;
     }
 
-    try {
-      setSaving(true);
-
-      if (onSave) {
-        await onSave({
-          studentId,
-          studentName,
-          documentType,
-          fileName,
-          fileUrl,
-        });
-      }
-    } finally {
-      setSaving(false);
+    // c) best suggestion from the classifier (registrar just confirms)
+    const top = ocrResult?.document_type_suggestions?.[0];
+    if (top && docs.some((d) => d.document_id === top.document_id)) {
+      setDocumentId(String(top.document_id));
+      setSuggested(true);
     }
-  };
+  }, [docs, ocrResult, detectedDocType]);
+
+  
+  // 3. Auto-select the student matched by the current scan
+  useEffect(() => {
+    if (studentId) {
+      setPickedStudent(null);
+      return;
+    }
+
+    setPickedStudent(ocrResult?.matched_student ?? null);
+  }, [ocrResult, studentId]);
+
+
+  const finalStudentId = studentId || pickedStudent?.student_id || "";
+  const finalStudentName =
+    studentName ||
+    (pickedStudent
+      ? [pickedStudent.first_name, pickedStudent.middle_name, pickedStudent.last_name]
+          .filter(Boolean).join(" ")
+      : ocrFullName);
+
+const handleSave = async () => {
+  if (!documentId) return;
+
+  if (!studentId && !finalStudentId) {
+    alert("No student matched. Please select the correct student before saving.");
+    return;
+  }
+
+  try {
+    setSaving(true);
+
+    const doc = docs.find(
+      (d) => String(d.document_id) === documentId
+    );
+
+    await onSave?.({
+      studentId: finalStudentId,
+      studentName: finalStudentName,
+      ocrName,
+      documentId: Number(documentId),
+      documentType: doc?.document_name || "",
+      fileName,
+      fileUrl,
+    });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const content = (
     <div className="ocr-overlay">
@@ -120,7 +136,7 @@ export default function OCRConfirmation({
         <div className="ocr-header">
           <div>
             <h3 className="ocr-title">
-              NEW OCR CONFIRMATION TEST
+              DOCUMENT CONFIRMATION
             </h3>
 
             <p className="ocr-sub">
@@ -216,27 +232,28 @@ export default function OCRConfirmation({
                   Document type
                 </label>
 
-                <select
-                  className="ocr-field-select"
-                  value={documentType}
-                  onChange={(e) =>
-                    setDocumentType(e.target.value)
-                  }
-                  disabled={saving}
-                >
-                  <option value="">
-                    Select Document Type
-                  </option>
+              <select
+  className="ocr-field-select"
+  value={documentId}
+  onChange={(e) => { setDocumentId(e.target.value); setSuggested(false); }}
+  disabled={saving || !docs.length}
+>
+  <option value="">Select Document Type</option>
+  {docs.map((d) => (
+    <option key={d.document_id} value={String(d.document_id)}>
+      {d.document_name}
+    </option>
+  ))}
+</select>
 
-                  {documentTypes.map((type) => (
-                    <option
-                      key={type}
-                      value={type}
-                    >
-                      {type}
-                    </option>
-                  ))}
-                </select>
+<p className="ocr-field-hint">
+  {docsError ||
+    (documentId
+      ? suggested
+        ? "✣ Best guess from OCR. Please confirm."
+        : "✣ Auto-detected via OCR. Correct if needed."
+      : "Could not detect the type. Please choose one.")}
+</p>
 
                 <p className="ocr-field-hint">
                   ✣ Auto-detected via OCR — correct if needed
@@ -245,73 +262,31 @@ export default function OCRConfirmation({
               </div>
 
 
-              {/* STUDENT NAME */}
               <div className="ocr-info-row">
-                <span className="ocr-info-label">
-                  Student name
-                </span>
+  <span className="ocr-info-label">Student name</span>
+  <span className="ocr-info-value">{finalStudentName || "—"}</span>
+</div>
 
-                <span className="ocr-info-value">
-                  {studentName || "—"}
-                </span>
-              </div>
+<div className="ocr-info-row">
+  <span className="ocr-info-label">Student ID</span>
+  <span className="ocr-info-value">{finalStudentId || "—"}</span>
+</div>
 
-
-              {/* STUDENT ID */}
-              <div className="ocr-info-row">
-                <span className="ocr-info-label">
-                  Student ID
-                </span>
-
-                <span className="ocr-info-value">
-                  {studentId || "—"}
-                </span>
-              </div>
-
-
-              {/* CONFIDENCE */}
-              {documentTypeConfidence !== null &&
-                documentTypeConfidence !== undefined && (
-                  <div className="ocr-info-row">
-                    <span className="ocr-info-label">
-                      Confidence score
-                    </span>
-
-                    <span className="ocr-confidence-value">
-                      {typeof documentTypeConfidence === "number"
-                        ? `${Math.round(
-                            documentTypeConfidence <= 1
-                              ? documentTypeConfidence * 100
-                              : documentTypeConfidence
-                          )}% match`
-                        : documentTypeConfidence}
-                    </span>
-                  </div>
-                )}
-
-            </div>
-
-
-            {/* ==================================================
-                EXTRACTED TEXT
-                ================================================== */}
-            <div className="ocr-panel ocr-extracted-panel">
-
-              <div className="ocr-extracted-header">
-
-                <span className="ocr-extracted-label">
-                  Extracted text (OCR)
-                </span>
-
-                <span className="ocr-raw-output-tag">
-                  raw output
-                </span>
-
-              </div>
-
-              <div className="ocr-extracted-text">
-                {detectedDocType || "OCR text available from scanner."}
-              </div>
+{!studentId && !pickedStudent && candidates.length > 0 && (
+  <div className="ocr-field-group">
+    <p className="ocr-field-hint">No confident match. Is it one of these?</p>
+    {candidates.map((c) => (
+      <button
+        key={c.student_id}
+        type="button"
+        className="ocr-cancel-btn"
+        onClick={() => setPickedStudent(c)}
+      >
+        {c.student_id} · {c.last_name}, {c.first_name}
+      </button>
+    ))}
+  </div>
+)}
 
             </div>
 
@@ -340,7 +315,7 @@ export default function OCRConfirmation({
               type="button"
               className="ocr-save-btn"
               onClick={handleSave}
-              disabled={!documentType || saving}
+              disabled={!documentId || saving}
             >
               {saving
                 ? "Saving..."

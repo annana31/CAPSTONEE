@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import datetime
+import requests
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -282,17 +283,110 @@ def scan_document():
         # URL React can use to display the image
         # ----------------------------------------------------
 
-        file_url = f"http://127.0.0.1:5000/scans/{filename}"
+        
+        # ----------------------------------------------------
+        # Build the scanned image URL
+        # ----------------------------------------------------
 
-        return jsonify({
+        file_url = f"{request.host_url.rstrip('/')}/scans/{filename}"
+
+        # ----------------------------------------------------
+        # Send the ACTUAL SCANNED FILE to PaddleOCR
+        # ----------------------------------------------------
+
+        print("Sending scanned file to PaddleOCR...")
+        print(f"OCR file: {filepath}")
+
+        ocr_result = {}
+        ocr_error = None
+
+        try:
+            with open(filepath, "rb") as scanned_file:
+                ocr_response = requests.post(
+                    "http://127.0.0.1:5001/ocr",
+                    files={
+                        "file": (
+                            filename,
+                            scanned_file,
+                            "image/jpeg"
+                        )
+                    },
+                    timeout=600
+                )
+
+            try:
+                ocr_result = ocr_response.json()
+            except ValueError:
+                ocr_result = {}
+
+            if not ocr_response.ok:
+                ocr_error = (
+                    ocr_result.get("error")
+                    or ocr_result.get("message")
+                    or f"OCR server returned HTTP {ocr_response.status_code}"
+                )
+
+            elif not ocr_result.get("success", False):
+                ocr_error = (
+                    ocr_result.get("error")
+                    or ocr_result.get("message")
+                    or "OCR could not extract the document."
+                )
+
+            else:
+                print("PaddleOCR completed successfully.")
+                print("Extracted name:",
+                      ocr_result.get("first_name", ""),
+                      ocr_result.get("middle_name", ""),
+                      ocr_result.get("last_name", ""))
+                print("Document type:",
+                      ocr_result.get("document_type", ""))
+
+        except requests.RequestException as ocr_exception:
+            ocr_error = str(ocr_exception)
+            print("PADDLEOCR CONNECTION ERROR:", ocr_error)
+
+        # ----------------------------------------------------
+        # Return scan information AND OCR results to React
+        # ----------------------------------------------------
+
+        response_data = {
             "success": True,
             "message": "Document scanned successfully.",
             "filename": filename,
             "file_url": file_url,
             "scanner": {
                 "id": device_uid
-            }
-        })
+            },
+
+            # OCR status
+            "ocr_success": ocr_error is None,
+            "ocr_error": ocr_error,
+
+            # Extracted information
+            "first_name": ocr_result.get("first_name", ""),
+            "middle_name": ocr_result.get("middle_name", ""),
+            "last_name": ocr_result.get("last_name", ""),
+            "birthdate": (
+                ocr_result.get("birthdate")
+                or ocr_result.get("birthday")
+                or ""
+            ),
+            "document_type": ocr_result.get("document_type", ""),
+            "document_type_confidence": (
+                ocr_result.get("document_type_confidence")
+            ),
+            "document_type_suggestions": (
+                ocr_result.get("document_type_suggestions", [])
+            ),
+            "document_id": ocr_result.get("document_id"),
+            "raw_text": ocr_result.get("raw_text", "")
+        }
+
+        print("Returning scan and OCR response to React.")
+
+        return jsonify(response_data), 200
+
 
     except Exception as e:
         print("\nSCAN ERROR")
