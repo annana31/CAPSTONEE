@@ -7,6 +7,8 @@ import "./styles/Students.css";
 import "./styles/StudentProfile.css";
 import "./styles/Dashboard.css";
 
+const BUCKET = "student-documents";
+
 const statuses = ["Active", "LOA", "Inactive", "Graduated"];
 
 const yearLevels = [
@@ -31,16 +33,66 @@ const initialStudent = {
   status: "Active",
 };
 
-const initialCredentials = [
-  { name: "Birth Certificate", date: "2024-08-15", status: "Verified", file: "birth_certificate.pdf" },
-  { name: "Form 138", date: "2024-08-15", status: "Verified", file: "form_138.pdf" },
-  { name: "Form 137", date: "2024-08-20", status: "Verified", file: "form_137.pdf" },
-  { name: "Good Moral", date: "2024-08-15", status: "Verified", file: "good_moral.pdf" },
-  { name: "Grades", date: "2025-06-10", status: "Verified", file: "grades.pdf" },
-  { name: "TOR", date: null, status: "Not Uploaded", file: null },
-  { name: "LOA", date: null, status: "Not Uploaded", file: null },
-  { name: "Withdrawal", date: null, status: "Not Uploaded", file: null },
+// Standard credential rows. Real uploads are loaded from
+// tbl_student_documents and merged into these rows.
+const credentialNames = [
+  "Certification of Live Birth",
+  "Form 138",
+  "Form 137",
+  "Good Moral",
+  "Grades",
+  "TOR",
+  "LOA",
+  "Withdrawal",
 ];
+
+const initialCredentials = credentialNames.map((name) => ({
+  name,
+  date: null,
+  status: "Not Uploaded",
+  file: null,
+  file_path: null,
+  file_url: null,
+}));
+
+const EXT_BY_TYPE = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+const safeFileName = (name) =>
+  (name || "document")
+    .replace(/^.*[\\/]/, "")
+    .replace(/[^A-Za-z0-9._-]/g, "_");
+
+// Every student has their own folder, e.g. students/20233001
+const studentFolder = (s) => s.folder_path || `students/${s.student_id}`;
+
+// "Birth Certificate" -> "birth_certificate" (subfolder per document type)
+const docSlug = (name) =>
+  (name || "other")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "other";
+
+// loose comparison: "Birth Certificate" == "birth_certificate"
+const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const MIME_BY_EXT = {
+  pdf: "application/pdf",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+};
+
+const mimeFromName = (name) =>
+  MIME_BY_EXT[(name || "").split("?")[0].split(".").pop().toLowerCase()] || "";
+
+const looksPdf = (cred) =>
+  /\.pdf(\?|$)/i.test(cred.file_path || cred.file || cred.file_url || "");
 
 const statusClass = (status) => {
   switch (status) {
@@ -55,14 +107,16 @@ const statusClass = (status) => {
   }
 };
 
+const isVerified = (status) => status === "Verified" || status === "Active";
+
 const credStatusClass = (status) => {
-  if (status === "Verified") return "cred-verified";
+  if (isVerified(status)) return "cred-verified";
   if (status === "Pending") return "cred-pending";
   return "cred-not-uploaded";
 };
 
 const verifiedCount = (creds) =>
-  creds.filter((c) => c.status === "Verified").length;
+  creds.filter((c) => isVerified(c.status)).length;
 
 export default function StudentProfile({ studentId, onBack }) {
   const [student, setStudent] = useState(initialStudent);
@@ -89,6 +143,93 @@ export default function StudentProfile({ studentId, onBack }) {
   useEffect(() => {
     showEditModalRef.current = showEditModal;
   }, [showEditModal]);
+
+  // ============================================================
+  // DOCUMENT STORAGE (one folder per student)
+  // ============================================================
+
+  // Copies the scanned file into the student's own folder, inside a
+  // subfolder named after the document type, and returns the stored path:
+  // students/<id>/birth_certificate/<time>_<name>
+  const uploadToStudentFolder = async ({ sourceUrl, fileName, documentName }) => {
+    const folder = `${studentFolder(student)}/${docSlug(documentName)}`;
+
+    // Already inside the student's folder: nothing to upload.
+    if (sourceUrl && sourceUrl.startsWith(folder + "/")) return sourceUrl;
+
+    if (!sourceUrl) {
+      throw new Error("The scanned file could not be found.");
+    }
+
+    const res = await fetch(sourceUrl);
+    if (!res.ok) {
+      throw new Error(`Could not read the scanned file (${res.status}).`);
+    }
+    const blob = await res.blob();
+
+    let name = safeFileName(fileName);
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(name) && EXT_BY_TYPE[blob.type]) {
+      name += "." + EXT_BY_TYPE[blob.type];
+    }
+
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const path = `${folder}/${stamp}_${name}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, blob, {
+        contentType: blob.type || mimeFromName(name) || undefined,
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+    return path;
+  };
+
+  // Loads the student's saved documents and merges them into the
+  // credential rows.
+  const loadDocuments = async (sid) => {
+    const { data, error: docError } = await supabase
+      .from("tbl_student_documents")
+      .select(
+        "student_documents_id, document_id, document_name, file_path, date_uploaded, status, tbl_documents(document_name)"
+      )
+      .eq("student_id", sid)
+      .order("date_uploaded", { ascending: false });
+
+    if (docError) throw docError;
+
+    const merged = initialCredentials.map((c) => ({ ...c }));
+    const seen = new Set();
+
+    for (const row of data || []) {
+      // rows are newest first: only the latest upload per document type
+      if (seen.has(row.document_id)) continue;
+      seen.add(row.document_id);
+
+      const typeName = row.tbl_documents?.document_name || "Document";
+
+      const entry = {
+        name: typeName,
+        date: row.date_uploaded ? row.date_uploaded.split("T")[0] : null,
+        // older rows were saved as "Active": show them as Verified
+        status: !row.status || row.status === "Active" ? "Verified" : row.status,
+        file: row.document_name,
+        file_path: row.file_path,
+        file_url: null,
+      };
+
+      const idx = merged.findIndex((c) => norm(c.name) === norm(typeName));
+
+      if (idx >= 0) {
+        merged[idx] = { ...entry, name: merged[idx].name };
+      } else {
+        merged.push(entry);
+      }
+    }
+
+    setCredentials(merged);
+  };
 
   // ============================================================
   // SCANNER (reusable hook)
@@ -120,78 +261,92 @@ export default function StudentProfile({ studentId, onBack }) {
 
     // Called when the OCR confirmation is saved
     onConfirmed: async (
-  {
-    documentId,
-    documentType,
-    fileName,
-    fileUrl,
-  },
-  selectedCredential
-) => {
-  try {
-    const sid = student.student_id;
+      { documentId, documentType, fileName, fileUrl },
+      selectedCredential
+    ) => {
+      let uploadedPath = null;
 
-    if (!sid) {
-      throw new Error("No student is selected.");
-    }
+      try {
+        const sid = student.student_id;
 
-    let docId = documentId;
+        if (!sid) {
+          throw new Error("No student is selected.");
+        }
 
-    if (!docId && documentType) {
-      const { data, error } = await supabase
-        .from("tbl_documents")
-        .select("document_id")
-        .ilike("document_name", documentType)
-        .maybeSingle();
+        let docId = documentId;
 
-      if (error) throw error;
-      docId = data?.document_id;
-    }
+        if (!docId && documentType) {
+          const { data, error: docError } = await supabase
+            .from("tbl_documents")
+            .select("document_id")
+            .ilike("document_name", documentType)
+            .maybeSingle();
 
-    if (!docId) {
-      throw new Error(
-        "Document type was not identified. Please select a document type."
-      );
-    }
+          if (docError) throw docError;
+          docId = data?.document_id;
+        }
 
-    const { error } = await supabase
-      .from("tbl_student_documents")
-      .insert({
-        student_id: sid,
-        document_id: docId,
-        document_name: fileName,
-        file_path: fileUrl,
-        date_uploaded: new Date().toISOString(),
-        status: "Active",
-      });
+        if (!docId) {
+          throw new Error(
+            "Document type was not identified. Please select a document type."
+          );
+        }
 
-    if (error) throw error;
+        // official name of the document type, e.g. "Birth Certificate"
+        const { data: docRow } = await supabase
+          .from("tbl_documents")
+          .select("document_name")
+          .eq("document_id", docId)
+          .maybeSingle();
 
-    setCredentials((prev) =>
-      prev.map((cred) =>
-        cred.name === documentType ||
-        cred.name === selectedCredential?.name
-          ? {
-              ...cred,
-              date: today(),
-              status: "Active",
-              file: fileName || cred.file,
-              file_url: fileUrl || cred.file_url,
-            }
-          : cred
-      )
-    );
+        const typeName =
+          docRow?.document_name ||
+          documentType ||
+          selectedCredential?.name ||
+          "other";
 
-    alert("Document saved successfully.");
-  } catch (err) {
-    console.error("Save scanned document failed:", err);
-    alert(err.message || "Failed to save the scanned document.");
-  }
-},
+        // 1) store the scanned file in the student's folder, inside the
+        //    subfolder of its document type
+        uploadedPath = await uploadToStudentFolder({
+          sourceUrl: fileUrl,
+          fileName,
+          documentName: typeName,
+        });
+
+        // 2) save the record pointing at that folder path
+        const { error: insertError } = await supabase
+          .from("tbl_student_documents")
+          .insert({
+            student_id: sid,
+            document_id: docId,
+            document_name: (fileName || "").slice(0, 100) || null,
+            file_path: uploadedPath,
+            date_uploaded: new Date().toISOString(),
+            status: "Verified",
+          });
+
+        if (insertError) throw insertError;
+
+        // reload from the database so the document appears in its own
+        // row (e.g. Birth Certificate) with the saved folder path
+        await loadDocuments(sid);
+
+        alert(`Saved in ${studentFolder(student)}/${docSlug(typeName)}/`);
+      } catch (err) {
+        console.error("Save scanned document failed:", err);
+
+        // don't leave an orphan file behind if the record was not saved
+        if (uploadedPath) {
+          await supabase.storage.from(BUCKET).remove([uploadedPath]);
+        }
+
+        alert(err.message || "Failed to save the scanned document.");
+      }
+    },
   });
 
   // ============================================================
-  // LOAD COLLEGES, PROGRAMS AND SELECTED STUDENT
+  // LOAD COLLEGES, PROGRAMS, STUDENT AND DOCUMENTS
   // ============================================================
 
   useEffect(() => {
@@ -228,6 +383,8 @@ export default function StudentProfile({ studentId, onBack }) {
         setPrograms(programRes.data || []);
         setStudent(studentRes.data);
         setEditForm(studentRes.data);
+
+        await loadDocuments(studentRes.data.student_id);
       } catch (err) {
         if (!cancelled) {
           setError(err.message || "Failed to load student.");
@@ -244,6 +401,7 @@ export default function StudentProfile({ studentId, onBack }) {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
   // ============================================================
@@ -377,8 +535,79 @@ export default function StudentProfile({ studentId, onBack }) {
   // PREVIEW
   // ============================================================
 
-  const handlePreview = (cred) => {
-    setPreviewCred(cred);
+  const closePreview = () => {
+    setShowPreviewModal(false);
+    setPreviewCred((prev) => {
+      if (prev?.blob_url) URL.revokeObjectURL(prev.blob_url);
+      return null;
+    });
+  };
+
+  const handlePreview = async (cred) => {
+    setError("");
+
+    let url = cred.file_url || null;
+    let blobUrl = null;
+    let pdf = looksPdf(cred);
+    let previewError = "";
+
+    // Files in the student's folder are private, so download them with the
+    // signed-in session and show them from a local blob.
+    if (!url && cred.file_path) {
+      try {
+        if (/^https?:\/\//i.test(cred.file_path)) {
+          // older record not yet moved into a student folder
+          url = cred.file_path;
+
+          try {
+            const res = await fetch(cred.file_path);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            let blob = await res.blob();
+            if (!blob.type || blob.type === "application/octet-stream") {
+              const guessed = mimeFromName(cred.file_path);
+              if (guessed) blob = new Blob([blob], { type: guessed });
+            }
+
+            if (blob.type === "application/pdf") pdf = true;
+            blobUrl = URL.createObjectURL(blob);
+            url = blobUrl;
+          } catch (fetchErr) {
+            // keep the direct link; the <img> reports it if it fails too
+            console.warn("Old file link could not be fetched:", fetchErr);
+          }
+        } else {
+          const { data, error: dlError } = await supabase.storage
+            .from(BUCKET)
+            .download(cred.file_path);
+
+          if (dlError) throw dlError;
+
+          let blob = data;
+          if (!blob.type || blob.type === "application/octet-stream") {
+            const guessed = mimeFromName(cred.file_path);
+            if (guessed) blob = new Blob([data], { type: guessed });
+          }
+
+          if (blob.type === "application/pdf") pdf = true;
+          blobUrl = URL.createObjectURL(blob);
+          url = blobUrl;
+        }
+      } catch (err) {
+        console.error("Preview failed:", err);
+        previewError =
+          (err && (err.message || err.error_description)) ||
+          "Could not load the file.";
+      }
+    }
+
+    setPreviewCred({
+      ...cred,
+      file_url: url,
+      blob_url: blobUrl,
+      is_pdf: pdf,
+      preview_error: previewError,
+    });
     setShowPreviewModal(true);
   };
 
@@ -492,6 +721,7 @@ export default function StudentProfile({ studentId, onBack }) {
               ["Year Level", yearName],
               ["College", collegeName],
               ["Program", programName],
+              ["Document Folder", studentFolder(student)],
             ].map(([label, value]) => (
               <div key={label}>
                 <p className="profile-info-label">{label}</p>
@@ -581,10 +811,7 @@ export default function StudentProfile({ studentId, onBack }) {
 
       {/* PREVIEW MODAL */}
       {showPreviewModal && previewCred && (
-        <div
-          className="modal-overlay"
-          onClick={() => setShowPreviewModal(false)}
-        >
+        <div className="modal-overlay" onClick={closePreview}>
           <div
             className="preview-modal-card"
             onClick={(e) => e.stopPropagation()}
@@ -597,7 +824,7 @@ export default function StudentProfile({ studentId, onBack }) {
 
             <div className="preview-modal-body">
               {previewCred.file_url ? (
-                isPdf(previewCred.file_url) ? (
+                previewCred.is_pdf || isPdf(previewCred.file_url) ? (
                   <iframe
                     title={previewCred.name}
                     src={previewCred.file_url}
@@ -607,6 +834,18 @@ export default function StudentProfile({ studentId, onBack }) {
                   <img
                     src={previewCred.file_url}
                     alt={previewCred.name}
+                    onError={() =>
+                      setPreviewCred(
+                        (prev) =>
+                          prev && {
+                            ...prev,
+                            file_url: null,
+                            preview_error: `the file link did not load (${
+                              prev.file_path || "unknown path"
+                            })`,
+                          }
+                      )
+                    }
                     style={{
                       maxWidth: "100%",
                       maxHeight: "500px",
@@ -623,17 +862,16 @@ export default function StudentProfile({ studentId, onBack }) {
                   </p>
 
                   <p className="text-gray-400 text-xs mt-1">
-                    No preview available for this file yet
+                    {previewCred.preview_error
+                      ? `Could not load the file: ${previewCred.preview_error}`
+                      : "No preview available for this file yet"}
                   </p>
                 </div>
               )}
             </div>
 
             <div className="preview-modal-footer">
-              <button
-                className="preview-close-btn"
-                onClick={() => setShowPreviewModal(false)}
-              >
+              <button className="preview-close-btn" onClick={closePreview}>
                 Close
               </button>
 
