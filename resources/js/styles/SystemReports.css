@@ -12,7 +12,7 @@
 
 /* ── Stat Cards ── */
 .sr-stats-grid {
-  @apply grid grid-cols-4 gap-4 mt-6 mb-6;
+  @apply grid grid-cols-3 gap-4 mt-6 mb-6;
 }
 
 .sr-stat-card {

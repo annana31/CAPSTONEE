@@ -138,7 +138,7 @@ export default function SystemReports() {
       {/* Stat Cards */}
       <div className="sr-stats-grid">
         {loading
-          ? Array(4).fill(null).map((_, i) => (
+          ? Array(3).fill(null).map((_, i) => ( // CHANGED: 4 -> 3 placeholders
               <div key={i} className="sr-stat-card" style={{ opacity: 0.4 }}>
                 <p className="sr-stat-label">Loading…</p>
                 <p className="sr-stat-value">—</p>
@@ -146,7 +146,7 @@ export default function SystemReports() {
                 <div className="sr-stat-accent" />
               </div>
             ))
-          : stats.map((s, i) => (
+          : stats.filter(s => !/archiv/i.test(s.label)).map((s, i) => ( // CHANGED: hides the archived card
               <div key={i} className="sr-stat-card">
                 <p className="sr-stat-label">{s.label}</p>
                 <p className="sr-stat-value">{s.value}</p>

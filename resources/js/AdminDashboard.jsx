@@ -80,7 +80,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
   const [errorMsg, setErrorMsg] = useState("");
   const [stats, setStats] = useState({
     staffCount: 0, studentCount: 0, activeStudentCount: 0,
-    completedRequests: 0, totalRequestDocs: 0, archivedDocuments: 0, lastArchivedDate: null,
+    completedRequests: 0, totalRequestDocs: 0,
   });
   const [barData, setBarData] = useState(months.map(() => ({ uploads: 0, archived: 0 })));
   const [credentialDist, setCredentialDist] = useState([]);
@@ -112,9 +112,6 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
         if (firstError) throw firstError.error;
 
         const docs = studentDocsRes.data || [];
-        const archivedDocs = docs.filter(d => (d.status || "").toLowerCase() === "archived");
-        const archivedCount = archivedDocs.length;
-        const lastArchivedDate = archivedDocs.map(d => d.date_uploaded).filter(Boolean).sort((a, b) => new Date(b) - new Date(a))[0] || null;
 
         const currentYear = new Date().getFullYear();
         const monthly = months.map(() => ({ uploads: 0, archived: 0 }));
@@ -150,8 +147,6 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
           activeStudentCount: activeStudentRes.count ?? 0,
           completedRequests: completedReqRes.count ?? 0,
           totalRequestDocs: totalReqDocsRes.count ?? 0,
-          archivedDocuments: archivedCount,
-          lastArchivedDate,
         });
         setBarData(monthly);
         setCredentialDist(distArray);
@@ -169,15 +164,11 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
 
   const totalCreds = credentialDist.reduce((s, c) => s + c.value, 0);
   const resolutionRate = stats.totalRequestDocs > 0 ? Math.round((stats.completedRequests / stats.totalRequestDocs) * 1000) / 10 : 0;
-  const lastArchivedText = stats.lastArchivedDate
-    ? `Last: ${new Date(stats.lastArchivedDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-    : "No documents archived yet";
 
   const statCards = [
     { label: "Total Registrar Staff", value: stats.staffCount.toLocaleString(), sub: `${stats.staffCount} staff account${stats.staffCount === 1 ? "" : "s"}` },
     { label: "Total Student Records", value: stats.studentCount.toLocaleString(), sub: `${stats.activeStudentCount} active` },
     { label: "Completed Requests", value: stats.completedRequests.toLocaleString(), sub: stats.totalRequestDocs > 0 ? `${resolutionRate}% resolution rate` : "No requests yet" },
-    { label: "Archived Documents", value: stats.archivedDocuments.toLocaleString(), sub: lastArchivedText },
   ];
 
   return (
