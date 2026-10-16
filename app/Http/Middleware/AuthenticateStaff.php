@@ -5,8 +5,12 @@ namespace App\Http\Middleware;
 use App\Models\Staff;
 use Carbon\Carbon;
 use Closure;
+use Firebase\JWT\JWK;
+use Firebase\JWT\JWT;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 
 /**
  * RBAC — step 1: "Who is calling?"
@@ -25,6 +29,26 @@ class AuthenticateStaff implements AuthenticatesRequests
 
         if (!$token) {
             return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        // Supabase Auth token (checked first). If it isn't a valid Supabase
+        // token, fall through to the existing api_token check below.
+        try {
+            $jwks = Cache::remember('supabase_jwks', 3600, function () {
+                return Http::get(env('SUPABASE_URL') . '/auth/v1/.well-known/jwks.json')->json();
+            });
+
+            $payload = JWT::decode($token, JWK::parseKeySet($jwks, 'ES256'));
+            $supabaseStaff = Staff::where('auth_user_id', $payload->sub)->first();
+
+            if ($supabaseStaff) {
+                $request->attributes->set('staff', $supabaseStaff);
+                $request->setUserResolver(fn () => $supabaseStaff);
+
+                return $next($request);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Supabase JWT failed: ' . $e->getMessage());
         }
 
         // Only the SHA-256 hash of the token is stored in the database.

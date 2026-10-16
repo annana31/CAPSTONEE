@@ -16,6 +16,7 @@ class Staff extends Model
         'user_role',
         'password',
         'status',     // 'Active' when logged in, 'Inactive' on logout
+        'auth_user_id',
     ];
 
     protected $hidden = ['password', 'api_token', 'api_token_expires_at']; // RBAC: never expose token columns

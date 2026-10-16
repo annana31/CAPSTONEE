@@ -68,6 +68,11 @@ Route::middleware(['auth.staff', 'role:Admin'])->group(function () {
         'index', 'store', 'update', 'destroy',
     ]);
 });
+Route::middleware('auth.staff')->group(function () {
+    Route::post('/auth/session', [AuthController::class, 'session']);
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
+    // ...all your existing staff, reports, documents routes
+});
 
 // These fire during any staff member's own login/logout (Admin or Registrar),
 // before an RBAC token even exists yet — so they stay public, same as before RBAC.

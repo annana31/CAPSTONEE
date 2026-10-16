@@ -66,6 +66,7 @@ class Kernel extends HttpKernel
 
         // ── RBAC ──
         'auth.staff' => \App\Http\Middleware\AuthenticateStaff::class, // who is calling? (Bearer token)
-        'role'       => \App\Http\Middleware\EnsureRole::class,         // is that role allowed here?
+        'role'       => \App\Http\Middleware\EnsureRole::class,      
+        'supabase.auth' => \App\Http\Middleware\SupabaseAuth::class,   // is that role allowed here?
     ];
 }

@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import "./styles/Login.css";
 import { supabase } from "./supabaseClient";
@@ -29,7 +28,7 @@ export default function Login({ onLogin, onStudentAccess }) {
     try {
       const { data, error: dbError } = await supabase
         .from("tbl_staff")
-        .select("staff_id, user_role, username, password, status")
+        .select("staff_id, user_role, username, email, status") // CHANGED: "password" -> "email"
         .eq("username", inputUsername)
         .maybeSingle();
 
@@ -38,7 +37,14 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
-      if (data.password !== inputPassword) {
+      // CHANGED: password is now verified by Supabase Auth (replaces the plain-text comparison)
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email: data.email,
+          password: inputPassword,
+        });
+
+      if (authError || !authData?.session) {
         setError("Invalid username or password.");
         return;
       }
@@ -47,6 +53,7 @@ export default function Login({ onLogin, onStudentAccess }) {
         expectedRole &&
         data.user_role?.toLowerCase() !== expectedRole.toLowerCase()
       ) {
+        await supabase.auth.signOut(); // ADDED
         setError(
           `Access denied. This account does not have ${expectedRole} privileges.`
         );
@@ -54,6 +61,7 @@ export default function Login({ onLogin, onStudentAccess }) {
       }
 
       if (!normalizeRole(data.user_role)) {
+        await supabase.auth.signOut(); // ADDED
         setError(
           "Your account role is not recognized. Please contact the administrator."
         );
@@ -88,13 +96,9 @@ export default function Login({ onLogin, onStudentAccess }) {
         console.error("Failed to record login activity:", activityError);
       }
 
-      const apiToken = await requestApiToken(inputUsername, inputPassword);
-
-      if (apiToken) {
-        setAuthToken(apiToken);
-      } else {
-        console.warn("RBAC: could not get an API token from the backend.");
-      }
+      // CHANGED: the Supabase access token is now the API token
+      // (replaces: const apiToken = await requestApiToken(inputUsername, inputPassword);)
+      setAuthToken(authData.session.access_token);
 
       onLogin(data.username, data.user_role, Number(data.staff_id));
     } catch (err) {

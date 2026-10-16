@@ -12,7 +12,8 @@ import SystemReports from "./SystemReports";
 import AuditLogs from "./AuditLogs";
 // ── RBAC ──
 import { AuthProvider, ProtectedPage } from "./AuthContext";
-import { normalizeRole, canAccessPage, getDefaultPage, clearAuthToken, revokeApiToken } from "./rbac";
+import { normalizeRole, canAccessPage, getDefaultPage, clearAuthToken, revokeApiToken, setAuthToken } from "./rbac"; // CHANGED: added setAuthToken
+import { supabase } from "./supabaseClient"; // ADDED
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
@@ -328,6 +329,21 @@ export default function App() {
   }, [loggedIn, userRole, activePage]);
 
   // =====================================================
+  // ADDED: keep the stored API token in sync with the Supabase
+  // session. Supabase access tokens are refreshed automatically,
+  // so every refreshed token is saved for the Laravel API calls.
+  // =====================================================
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (session?.access_token) setAuthToken(session.access_token);
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // =====================================================
   // HANDLE VIEWING A STUDENT PROFILE
   // =====================================================
   const viewStudentProfile = (id) => {
@@ -436,6 +452,12 @@ export default function App() {
     }
 
     clearAuthToken(); // RBAC: forget the token in this browser
+
+    try {
+      await supabase.auth.signOut(); // ADDED: end the Supabase session
+    } catch (error) {
+      console.error("Failed to sign out of Supabase:", error);
+    }
 
     if (staffId) {
       // Set status to Inactive on logout.
