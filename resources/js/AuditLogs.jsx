@@ -21,8 +21,8 @@ const LOG_SELECT = `
   module_name,
   date_time,
   status,
-  tbl_staff ( username )
-`;
+  tbl_staff!inner ( username, user_role )
+`; // CHANGED: inner join + user_role, so admin activity can be filtered out
 
 const mapLogRow = (row) => ({
   id: row.activity_id,
@@ -50,6 +50,7 @@ export default function AuditLogs() {
       const { data, error } = await supabase
         .from("tbl_system_activity")
         .select(LOG_SELECT)
+        .neq("tbl_staff.user_role", "Admin") // CHANGED: hide admin activity
         .order("date_time", { ascending: false });
 
       if (!isMounted) return;
@@ -102,6 +103,7 @@ export default function AuditLogs() {
           const { data, error } = await supabase
             .from("tbl_system_activity")
             .select(LOG_SELECT)
+            .neq("tbl_staff.user_role", "Admin") // CHANGED: admin rows return nothing, so they are skipped below
             .eq("activity_id", activityId)
             .single();
 

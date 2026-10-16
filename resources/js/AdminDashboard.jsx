@@ -102,8 +102,8 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
           supabase.from("tbl_request_document").select("*", { count: "exact", head: true }).ilike("status", "Completed"),
           supabase.from("tbl_request_document").select("*", { count: "exact", head: true }),
           supabase.from("tbl_student_documents").select("document_name, date_uploaded, status"),
-          supabase.from("tbl_system_activity")
-            .select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff ( username )`)
+          supabase.from("tbl_system_activity").select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( username, user_role )`)
+            .neq("tbl_staff.user_role", "Admin")
             .order("date_time", { ascending: false }).limit(6),
         ]);
 
