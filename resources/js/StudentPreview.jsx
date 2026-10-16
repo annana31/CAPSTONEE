@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import { supabase } from "./supabaseClient";
 
 const requestTypes = [
   { label: "Authentication (₱5/page)", value: "Authentication", price: 5 },
@@ -47,16 +48,30 @@ const yearLevelMap = {
   1: "1st Year", 2: "2nd Year", 3: "3rd Year", 4: "4th Year", 5: "5th Year",
 };
 
+// ── Release date formatter (new) ─────────────────────────────────
+// due_date comes from tbl_request_document.due_date (a DATE column).
+// Only the YYYY-MM-DD part is used so timezones can't shift the day.
+const formatReleaseDate = (d) => {
+  if (!d) return "To be announced";
+  const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !day) return "To be announced";
+  return new Date(y, m - 1, day).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+};
+
 export default function StudentPreview({ onBack }) {
   // ── Search state (backend-driven, unchanged) ─────────────────
   const [studentId, setStudentId] = useState("");
   const [requests,  setRequests]  = useState([]);
   const [showForm,  setShowForm]  = useState(false);
 
-  // ── New: two-step flow ────────────────────────────────────────
+  // ── Two-step flow ─────────────────────────────────────────────
   const [step, setStep] = useState("pre"); // "pre" | "main"
 
-  // ── New: Pre-form state + validation ──────────────────────────
+  // ── Pre-form state + validation ───────────────────────────────
   const [preForm, setPreForm] = useState({
     contactNumber: "",
     isGraduate: null,
@@ -89,13 +104,13 @@ export default function StudentPreview({ onBack }) {
   const [subjectSY1,  setSubjectSY1]  = useState("");
   const [subjectSY2,  setSubjectSY2]  = useState("");
 
-  // ── New: validation errors for the main form ─────────────────
+  // ── Validation errors for the main form ──────────────────────
   const [mainErrors, setMainErrors] = useState({});
 
   const [submitting,      setSubmitting]      = useState(false);
   const [fetchingStudent, setFetchingStudent] = useState(false);
 
-  // ── Style helpers (merged: validation-aware + read-only) ─────
+  // ── Style helpers (validation-aware + read-only) ─────────────
   const inputClass = (hasError) =>
     `border ${hasError ? "border-red-400 bg-red-50" : "border-gray-300"} p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full`;
   const readOnlyClass = "border border-gray-200 p-3 rounded-lg text-sm w-full bg-gray-50 text-gray-500 cursor-not-allowed";
@@ -109,7 +124,7 @@ export default function StudentPreview({ onBack }) {
     ? <p className="text-xs text-red-500 mt-1 font-semibold">This field is required.</p>
     : null;
 
-  // ── Pre-form helpers (new) ────────────────────────────────────
+  // ── Pre-form helpers ──────────────────────────────────────────
   const handlePreFormChange = (field, value) => {
     setPreForm(prev => ({ ...prev, [field]: value }));
     setPreErrors(prev => ({ ...prev, [field]: false }));
@@ -137,7 +152,7 @@ export default function StudentPreview({ onBack }) {
     setStep("main");
   };
 
-  // ── Reset (extended to include pre-form + step) ──────────────
+  // ── Reset (includes pre-form + step) ─────────────────────────
   const resetForm = () => {
     setFormStudentId(""); setFullName(""); setEmail("");
     setCourse(""); setYearLevel(""); setPurpose("");
@@ -188,16 +203,60 @@ export default function StudentPreview({ onBack }) {
   // ── Search requests (backend, unchanged) ─────────────────────
   const searchRequest = async () => {
     if (!studentId.trim()) return;
-    try {
-      const res = await axios.get(`/api/request/student/${studentId}`);
-      setRequests(res.data);
-    } catch (error) {
-      console.error(error.response?.data ?? error.message);
-      alert("Could not fetch requests. Check your Student ID.");
+    // Read straight from Supabase (same source the registrar's Requests page
+    // writes the release date to) so due_date is always included.
+    const { data, error } = await supabase
+      .from("tbl_request")
+      .select(`
+        request_id,
+        student_id,
+        date_request,
+        main_doc:tbl_documents!fk_request_document ( document_name ),
+        documents:tbl_request_document (
+          request_document_id,
+          status,
+          due_date,
+          document:tbl_documents ( document_name )
+        )
+      `)
+      .eq("student_id", Number(studentId))
+      .order("date_request", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      alert("Could not fetch requests: " + error.message);
+      return;
     }
+
+    // One card per requested document
+    const rows = [];
+    (data || []).forEach(r => {
+      if (r.documents && r.documents.length > 0) {
+        r.documents.forEach(rd => {
+          rows.push({
+            key: `${r.request_id}-${rd.request_document_id}`,
+            student_id: r.student_id,
+            date_request: r.date_request,
+            document_name: rd.document?.document_name ?? r.main_doc?.document_name ?? "Document",
+            status: rd.status || "Pending",
+            due_date: rd.due_date,
+          });
+        });
+      } else {
+        rows.push({
+          key: `${r.request_id}`,
+          student_id: r.student_id,
+          date_request: r.date_request,
+          document_name: r.main_doc?.document_name ?? "Document",
+          status: "Pending",
+          due_date: null,
+        });
+      }
+    });
+    setRequests(rows);
   };
 
-  // ── New: validation for the main request form ────────────────
+  // ── Validation for the main request form ─────────────────────
   const validateMainForm = () => {
     const e = {};
     if (!formStudentId.trim()) e.studentId = true;
@@ -278,7 +337,7 @@ export default function StudentPreview({ onBack }) {
   return (
     <div className="min-h-screen bg-gray-100 px-6 py-12">
 
-      {/* ── RESPONSIVE STYLES (added) ── */}
+      {/* ── RESPONSIVE STYLES ── */}
       <style>{`
         /* Phones (below 640px) */
         @media (max-width: 639px) {
@@ -371,7 +430,7 @@ export default function StudentPreview({ onBack }) {
           </button>
         </div>
 
-        {/* ── PRE-FORM (new) ── */}
+        {/* ── PRE-FORM ── */}
         {showForm && step === "pre" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <h2 className="text-xl font-black text-[#0A2342] mb-1 tracking-tight">Before You Proceed</h2>
@@ -570,7 +629,7 @@ export default function StudentPreview({ onBack }) {
           </div>
         )}
 
-        {/* ── MAIN REQUEST FORM (backend calls unchanged, validation UI added) ── */}
+        {/* ── MAIN REQUEST FORM ── */}
         {showForm && step === "main" && (
           <div className="mt-6 bg-white border border-gray-200 rounded-2xl shadow-md p-8">
             <button onClick={() => setStep("pre")} className="mb-5 text-sm font-semibold text-[#0A2342] hover:text-[#D4A017] transition">
@@ -583,7 +642,7 @@ export default function StudentPreview({ onBack }) {
 
             <div className="grid md:grid-cols-2 gap-5">
 
-              {/* Student ID (form) — triggers backend lookup, unchanged */}
+              {/* Student ID (form) — triggers backend lookup */}
               <div className="md:col-span-2">
                 <label className={labelClass}>Student ID <Req /></label>
                 <div className="flex gap-3">
@@ -614,7 +673,7 @@ export default function StudentPreview({ onBack }) {
                 <ErrMsg show={mainErrors.studentId} />
               </div>
 
-              {/* Full Name — read only, auto-filled from backend */}
+              {/* Full Name — read only */}
               <div>
                 <label className={labelClass}>Full Name</label>
                 <input
@@ -625,7 +684,7 @@ export default function StudentPreview({ onBack }) {
                 />
               </div>
 
-              {/* Email — read only, auto-filled from backend */}
+              {/* Email — read only */}
               <div>
                 <label className={labelClass}>Email Address</label>
                 <input
@@ -636,7 +695,7 @@ export default function StudentPreview({ onBack }) {
                 />
               </div>
 
-              {/* Course — read only, auto-filled from backend */}
+              {/* Course — read only */}
               <div>
                 <label className={labelClass}>Course</label>
                 <input
@@ -647,7 +706,7 @@ export default function StudentPreview({ onBack }) {
                 />
               </div>
 
-              {/* Year Level — read only, auto-filled from backend */}
+              {/* Year Level — read only */}
               <div>
                 <label className={labelClass}>Year Level</label>
                 <input
@@ -817,7 +876,7 @@ export default function StudentPreview({ onBack }) {
           </div>
         )}
 
-        {/* Results (backend-driven, unchanged) */}
+        {/* Results (backend-driven) */}
         <div className="mt-8">
           {studentId && (
             <>
@@ -827,9 +886,9 @@ export default function StudentPreview({ onBack }) {
 
               {studentRequests.length > 0 ? (
                 <div className="space-y-4">
-                  {studentRequests.map((request, index) => (
+                  {studentRequests.map((request) => (
                     <div
-                      key={index}
+                      key={request.key}
                       className="bg-white border border-gray-200 rounded-2xl shadow-sm p-5 flex justify-between items-center"
                     >
                       <div>
@@ -837,10 +896,19 @@ export default function StudentPreview({ onBack }) {
                         <p className="text-gray-400 text-xs mt-0.5">
                           Submitted: {new Date(request.date_request).toLocaleDateString()}
                         </p>
+                        {/* Release date (new) — from tbl_request_document.due_date */}
+                        <p className="text-xs mt-0.5 font-semibold text-[#0A2342]">
+                          Release Date:{" "}
+                          <span className={request.due_date ? "text-[#D4A017]" : "text-gray-400 font-normal"}>
+                            {formatReleaseDate(request.due_date)}
+                          </span>
+                        </p>
                       </div>
                       <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide ${
-                        request.status === "Approved"
+                        request.status === "Completed" || request.status === "Approved"
                           ? "bg-green-100 text-green-700"
+                          : request.status === "Cancelled"
+                          ? "bg-red-100 text-red-700"
                           : "bg-yellow-100 text-yellow-700"
                       }`}>
                         {request.status}

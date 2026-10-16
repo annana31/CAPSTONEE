@@ -1,9 +1,26 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { supabase } from "./supabaseClient"; 
+import { supabase } from "./supabaseClient";
+import StudentProfile from "./StudentProfile.jsx";
 import "./styles/Requests.css";
 
 const PAGE_SIZE = 10;
 
+// Credentials a student must have VERIFIED (in tbl_student_documents, as shown
+// on the Student Profile page) to count as "complete credentials".
+// LOA and Withdrawal are left out because they only apply to some students.
+// Add or remove names here to change the rule. Names must match
+// tbl_documents.document_name.
+const REQUIRED_CREDENTIALS = [
+  "Certification of Live Birth",
+  "Form 138",
+  "Form 137",
+  "Good Moral",
+  "Grades",
+  "TOR",
+];
+
+// loose comparison: "Birth Certificate" == "birth_certificate"
+const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 function deriveStatus(docs) {
   if (docs.length === 0) return "Pending";
@@ -12,16 +29,83 @@ function deriveStatus(docs) {
   return "Pending";
 }
 
-function deriveRemarks(docs) {
+// Builds the credential summary for one student from their rows in
+// tbl_student_documents, using the same rules as the Student Profile page:
+// only the latest upload per document type counts, and a missing status or
+// "Active" is treated as Verified. Only "Verified" counts as complete.
+function credentialSummary(rows) {
+  const latest = new Map(); // document_id -> newest row
+  for (const row of rows) {
+    const prev = latest.get(row.document_id);
+    if (!prev || (row.date_uploaded || "") > (prev.date_uploaded || "")) {
+      latest.set(row.document_id, row);
+    }
+  }
+
+  const statusByName = new Map(); // normalized document name -> status
+  for (const row of latest.values()) {
+    const name = row.tbl_documents?.document_name;
+    const status = !row.status || row.status === "Active" ? "Verified" : row.status;
+    statusByName.set(norm(name), status);
+  }
+
+  let verifiedCount = 0;
+  const missing = [];
+  for (const name of REQUIRED_CREDENTIALS) {
+    const s = statusByName.get(norm(name));
+    if (s === "Verified") verifiedCount += 1;
+    else missing.push(s === "Pending" ? `${name} (pending verification)` : name);
+  }
+
+  return {
+    complete: missing.length === 0,
+    verifiedCount,
+    total: REQUIRED_CREDENTIALS.length,
+    missing,
+  };
+}
+
+// Remarks are based on the student's credentials (Student Profile).
+function deriveRemarks(docs, summary) {
+  if (docs.length > 0 && docs.every(d => d.status === "Cancelled")) return "Cancelled";
+
+  // No document rows on this request: don't claim it is ready for claiming
+  if (docs.length === 0) {
+    return summary && !summary.complete ? "Incomplete credentials" : "No documents attached";
+  }
+
   const pending = docs.filter(d => d.status !== "Completed" && d.status !== "Cancelled");
   if (pending.length === 0) return "Ready for claiming";
+
+  // Only flag incomplete credentials; otherwise show the pending document status
+  if (summary && !summary.complete) return "Incomplete credentials";
+
   return pending.map(d => `${d.name}: ${d.status || "Pending"}`).join(", ");
+}
+
+// Uses the free-text "other" value when the dropdown value is "Other".
+function resolveOther(value, other) {
+  const isOther = /^others?$/i.test((value || "").trim());
+  return isOther ? (other || value) : value;
+}
+
+// "CAV" -> "CAV (DFA)", "Certification" -> "Certification – Good Moral"
+function docLabel(name, r) {
+  const n = (name || "").toLowerCase();
+  if (n.includes("cav")) {
+    const agency = resolveOther(r.agency, r.agency_other);
+    return agency ? `${name} (${agency})` : name;
+  }
+  if (n.includes("certif")) {
+    const type = resolveOther(r.certification_type, r.certification_other);
+    return type ? `${name} – ${type}` : name;
+  }
+  return name;
 }
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
-
 
 function isDocDue(doc) {
   if (!doc.dueDate) return false;
@@ -75,7 +159,6 @@ const statusClass = (status) => {
   }
 };
 
-
 function DetailRow({ label, value }) {
   if (value === null || value === undefined || value === "") return null;
   return (
@@ -88,7 +171,7 @@ function DetailRow({ label, value }) {
   );
 }
 
-function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancelling }) {
+function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, onViewStudent, cancelling }) {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === "Escape") onClose();
@@ -99,6 +182,7 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
 
   if (!request) return null;
   const r = request;
+  const creds = r.credentials;
 
   return (
     <div
@@ -113,7 +197,17 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
         <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
           <div>
             <h3 className="text-lg font-semibold text-[#1f1d70]">{r.displayId}</h3>
-            <p className="text-sm text-gray-500">{r.studentName} · ID {r.studentId}</p>
+            <p className="text-sm text-gray-500">
+              <button
+                type="button"
+                onClick={() => onViewStudent(r.studentId)}
+                className="font-medium text-[#1f1d70] hover:underline"
+                title="Open student profile"
+              >
+                {r.studentName}
+              </button>{" "}
+              · ID {r.studentId}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <span className={statusClass(r.status)}>{r.status}</span>
@@ -129,6 +223,19 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
 
         {/* Body */}
         <div className="px-6 py-4">
+          {/* Credentials banner (from the Student Profile documents) */}
+          {creds && !creds.complete && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+              Incomplete credentials ({creds.verifiedCount}/{creds.total}) – missing:{" "}
+              {creds.missing.join(", ")}
+            </div>
+          )}
+          {creds && creds.complete && (
+            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs font-medium text-green-700">
+              Complete credentials ({creds.verifiedCount}/{creds.total}) – all required documents are verified.
+            </div>
+          )}
+
           {/* Requested documents */}
           <div className="mb-4">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
@@ -143,7 +250,7 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
                   const dueSoon = !overdue && isDocDue(doc);
                   return (
                     <div
-                      key={doc.requestDocumentId}
+                      key={doc.requestDocumentId ?? `v-${doc.documentId}`}
                       className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-100 px-3 py-2"
                     >
                       <div className="flex flex-col">
@@ -155,15 +262,15 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
                           <span className="text-[11px] font-semibold text-red-600">Overdue</span>
                         )}
                         {dueSoon && !overdue && (
-                          <span className="text-[11px] font-semibold text-amber-600">Due today</span>
+                          <span className="text-[11px] font-semibold text-amber-600">Release today</span>
                         )}
                         <label className="flex items-center gap-1.5 text-xs text-gray-500">
-                          Due
+                          Release
                           <input
                             type="date"
                             value={doc.dueDate || ""}
                             onChange={(e) =>
-                              onSetDueDate(request.id, doc.requestDocumentId, e.target.value)
+                              onSetDueDate(request.id, doc, e.target.value)
                             }
                             className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-[#1f1d70] focus:outline-none"
                           />
@@ -195,10 +302,10 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
             <DetailRow label="Previous Request Date" value={formatDate(r.previousRequestDate)} />
             <DetailRow label="Cleared" value={yesNo(r.isCleared)} />
 
-            <DetailRow label="Agency" value={r.agency === "Other" ? r.agencyOther : r.agency} />
+            <DetailRow label="CAV Agency" value={resolveOther(r.agency, r.agencyOther)} />
             <DetailRow
               label="Certification Type"
-              value={r.certificationType === "Other" ? r.certificationOther : r.certificationType}
+              value={resolveOther(r.certificationType, r.certificationOther)}
             />
             <DetailRow label="Subject Semester" value={r.subjectSemester} />
             <DetailRow
@@ -210,6 +317,12 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+          <button
+            onClick={() => onViewStudent(r.studentId)}
+            className="inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-xs font-semibold text-[#1f1d70] shadow-sm transition hover:border-[#1f1d70] hover:bg-[#f7f7fc]"
+          >
+            View Student Profile
+          </button>
           {r.status === "Pending" && (
             <button
               onClick={() => onCancel(r.id)}
@@ -231,8 +344,14 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
   );
 }
 
-export default function Requests() {
+// Optional prop: onViewStudent(studentId). If the parent passes it, clicking a
+// student name calls it (use it to navigate with your own routing). If not,
+// the student profile is shown right inside this page with a Back button.
+export default function Requests({ onViewStudent }) {
   const [rawRequests, setRawRequests] = useState([]);
+  // null = not loaded yet; array = rows from tbl_student_documents
+  const [studentDocRows, setStudentDocRows] = useState(null);
+  const [docNameById, setDocNameById] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
@@ -240,20 +359,27 @@ export default function Requests() {
   const [page, setPage] = useState(1);
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [profileStudentId, setProfileStudentId] = useState(null);
 
   // Debounce ref for the realtime-triggered refetch below.
   const refetchTimeoutRef = useRef(null);
+
+  const openStudent = (sid) => {
+    setSelectedId(null);
+    if (onViewStudent) onViewStudent(sid);
+    else setProfileStudentId(sid);
+  };
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
     setError(null);
 
-    
     const { data, error: fetchError } = await supabase
       .from("tbl_request")
       .select(`
         request_id,
         student_id,
+        document_id,
         date_request,
         purpose,
         contact_number,
@@ -289,7 +415,38 @@ export default function Requests() {
       return;
     }
 
+    // Credentials of every student in the list (what the Student Profile shows)
+    const studentIds = [...new Set((data || []).map(r => r.student_id))];
+    console.log("tbl_request rows loaded:", (data || []).length);
+
+    // The credentials lookup must never hide the requests themselves: if it
+    // fails, show the requests without credential remarks and report the error.
+    let docRows = [];
+    if (studentIds.length > 0) {
+      const { data: sdData, error: sdError } = await supabase
+        .from("tbl_student_documents")
+        .select("student_id, document_id, status, date_uploaded, tbl_documents(document_name)")
+        .in("student_id", studentIds);
+
+      if (sdError) {
+        console.warn("Could not load student credentials:", sdError);
+        setError(`Could not load credentials: ${sdError.message}`);
+        docRows = null;
+      } else {
+        docRows = sdData || [];
+      }
+    }
+
+    // Document names, used when a request has no tbl_request_document rows
+    const { data: docList } = await supabase
+      .from("tbl_documents")
+      .select("document_id, document_name");
+    const names = {};
+    (docList || []).forEach(d => { names[d.document_id] = d.document_name; });
+    setDocNameById(names);
+
     setRawRequests(data || []);
+    setStudentDocRows(docRows);
     setLoading(false);
   }, []);
 
@@ -297,27 +454,11 @@ export default function Requests() {
     fetchRequests();
   }, [fetchRequests]);
 
-  // ============================================================
-  // REALTIME: reflect changes made anywhere else (another staff
-  // member completing a request, the public-facing request form
-  // creating a new one, a due date being set from another tab).
-  //
-  // Because each row here is built from a request joined with its
-  // student and multiple request-document rows, patching individual
-  // fields from a raw realtime payload would mean re-deriving that
-  // join by hand. Instead, any change to either tbl_request or
-  // tbl_request_document simply triggers a debounced refetch of the
-  // full list via fetchRequests() — simple and always consistent,
-  // and cheap enough for a request queue of this size. The debounce
-  // (400ms) coalesces bursts of events (e.g. a request plus several
-  // of its documents changing together) into a single refetch.
-  //
-  // Requires realtime to be enabled for tbl_request and
-  // tbl_request_document in Supabase (Database → Replication), and
-  // that RLS (if enabled) allows the current user to SELECT the rows
-  // involved.
-  // ============================================================
-
+  // REALTIME: any change to requests, request documents or student documents
+  // (e.g. a credential scanned/verified on the Student Profile) triggers a
+  // debounced (400ms) refetch, so remarks always match the current credentials.
+  // Requires realtime to be enabled for tbl_request, tbl_request_document and
+  // tbl_student_documents in Supabase.
   useEffect(() => {
     const scheduleRefetch = () => {
       if (refetchTimeoutRef.current) clearTimeout(refetchTimeoutRef.current);
@@ -328,16 +469,9 @@ export default function Requests() {
 
     const channel = supabase
       .channel("realtime:tbl_request-and-documents")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tbl_request" },
-        scheduleRefetch
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tbl_request_document" },
-        scheduleRefetch
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "tbl_request" }, scheduleRefetch)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tbl_request_document" }, scheduleRefetch)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tbl_student_documents" }, scheduleRefetch)
       .subscribe();
 
     return () => {
@@ -346,14 +480,45 @@ export default function Requests() {
     };
   }, [fetchRequests]);
 
+  // student_id -> credential summary
+  const credentialsByStudent = useMemo(() => {
+    if (!studentDocRows) return null;
+    const grouped = new Map();
+    for (const row of studentDocRows) {
+      if (!grouped.has(row.student_id)) grouped.set(row.student_id, []);
+      grouped.get(row.student_id).push(row);
+    }
+    const result = new Map();
+    for (const r of rawRequests) {
+      if (!result.has(r.student_id)) {
+        result.set(r.student_id, credentialSummary(grouped.get(r.student_id) || []));
+      }
+    }
+    return result;
+  }, [studentDocRows, rawRequests]);
+
   const requests = useMemo(() => {
     return rawRequests.map(r => {
-      const docs = (r.documents || []).map(rd => ({
+      let docs = (r.documents || []).map(rd => ({
         requestDocumentId: rd.request_document_id,
-        name: rd.document?.document_name || "Document",
+        documentId: rd.document?.document_id,
+        // Includes the certificate type or CAV agency in the name
+        name: docLabel(rd.document?.document_name || "Document", r),
         status: rd.status || "Pending",
         dueDate: rd.due_date,
       }));
+      // No tbl_request_document rows: show the request's own document.
+      // A real row is created the first time staff act on it.
+      if (docs.length === 0 && r.document_id) {
+        docs = [{
+          requestDocumentId: null,
+          documentId: r.document_id,
+          name: docLabel(docNameById[r.document_id] || "Document", r),
+          status: "Pending",
+          dueDate: null,
+        }];
+      }
+      const credentials = credentialsByStudent ? credentialsByStudent.get(r.student_id) : null;
       return {
         id: r.request_id,
         displayId: formatRequestId(r.request_id),
@@ -361,12 +526,12 @@ export default function Requests() {
         studentName: studentFullName(r.student),
         docs,
         requestDate: r.date_request,
-        remarks: deriveRemarks(docs),
+        credentials,
+        remarks: deriveRemarks(docs, credentials),
         status: deriveStatus(docs),
         dueToday: docs.some(isDocDue),
         overdue: docs.some(isDocOverdue),
         earliestDueDate: earliestDueDate(docs),
-
 
         purpose: r.purpose,
         contactNumber: r.contact_number,
@@ -388,7 +553,7 @@ export default function Requests() {
         subjectSyEnd: r.subject_sy_end,
       };
     });
-  }, [rawRequests]);
+  }, [rawRequests, credentialsByStudent, docNameById]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -413,18 +578,22 @@ export default function Requests() {
     setPage(1);
   }, [search, filterStatus]);
 
-  const handleComplete = async (id) => {
+  // Updates the open documents of a request. Documents that have no
+  // tbl_request_document row yet get one created with the new status.
+  const changeStatus = async (id, newStatus) => {
     setUpdatingId(id);
     const request = requests.find(r => r.id === id);
-    const idsToComplete = (request?.docs || [])
-      .filter(d => d.status !== "Completed" && d.status !== "Cancelled")
-      .map(d => d.requestDocumentId);
+    const open = (request?.docs || []).filter(
+      d => d.status !== "Completed" && d.status !== "Cancelled"
+    );
+    const realIds = open.filter(d => d.requestDocumentId != null).map(d => d.requestDocumentId);
+    const missing = open.filter(d => d.requestDocumentId == null);
 
-    if (idsToComplete.length > 0) {
+    if (realIds.length > 0) {
       const { error: updateError } = await supabase
         .from("tbl_request_document")
-        .update({ status: "Completed" })
-        .in("request_document_id", idsToComplete);
+        .update({ status: newStatus })
+        .in("request_document_id", realIds);
 
       if (updateError) {
         setError(updateError.message);
@@ -433,71 +602,61 @@ export default function Requests() {
       }
     }
 
-    // Reflect the change locally instead of a full refetch. The
-    // realtime subscription above will also schedule a refetch from
-    // this same write, which just re-confirms the same state.
-    setRawRequests(prev =>
-      prev.map(r =>
-        r.request_id === id
-          ? {
-              ...r,
-              documents: r.documents.map(rd =>
-                idsToComplete.includes(rd.request_document_id)
-                  ? { ...rd, status: "Completed" }
-                  : rd
-              ),
-            }
-          : r
-      )
-    );
-    setUpdatingId(null);
-  };
-
-  const handleCancel = async (id) => {
-    setUpdatingId(id);
-    const request = requests.find(r => r.id === id);
-    const idsToCancel = (request?.docs || [])
-      .filter(d => d.status !== "Completed" && d.status !== "Cancelled")
-      .map(d => d.requestDocumentId);
-
-    if (idsToCancel.length > 0) {
-      const { error: updateError } = await supabase
+    if (missing.length > 0) {
+      const { error: insertError } = await supabase
         .from("tbl_request_document")
-        .update({ status: "Cancelled" })
-        .in("request_document_id", idsToCancel);
+        .insert(missing.map(d => ({ request_id: id, document_id: d.documentId, status: newStatus })));
 
-      if (updateError) {
-        setError(updateError.message);
+      if (insertError) {
+        setError(insertError.message);
         setUpdatingId(null);
         return;
       }
+      await fetchRequests();
+    } else {
+      setRawRequests(prev =>
+        prev.map(r =>
+          r.request_id === id
+            ? {
+                ...r,
+                documents: r.documents.map(rd =>
+                  realIds.includes(rd.request_document_id) ? { ...rd, status: newStatus } : rd
+                ),
+              }
+            : r
+        )
+      );
     }
-
-    // Reflect the change locally instead of a full refetch. The
-    // realtime subscription above will also schedule a refetch from
-    // this same write, which just re-confirms the same state.
-    setRawRequests(prev =>
-      prev.map(r =>
-        r.request_id === id
-          ? {
-              ...r,
-              documents: r.documents.map(rd =>
-                idsToCancel.includes(rd.request_document_id)
-                  ? { ...rd, status: "Cancelled" }
-                  : rd
-              ),
-            }
-          : r
-      )
-    );
     setUpdatingId(null);
   };
 
-  const handleSetDueDate = async (requestId, requestDocumentId, dateValue) => {
+  const handleComplete = (id) => changeStatus(id, "Completed");
+  const handleCancel = (id) => changeStatus(id, "Cancelled");
+
+  // Sets the release date (stored in tbl_request_document.due_date),
+  // which the student side reads and displays.
+  const handleSetDueDate = async (requestId, doc, dateValue) => {
+    if (doc.requestDocumentId == null) {
+      const { error: insertError } = await supabase
+        .from("tbl_request_document")
+        .insert({
+          request_id: requestId,
+          document_id: doc.documentId,
+          status: "Pending",
+          due_date: dateValue || null,
+        });
+      if (insertError) {
+        setError(insertError.message);
+        return;
+      }
+      await fetchRequests();
+      return;
+    }
+
     const { error: updateError } = await supabase
       .from("tbl_request_document")
       .update({ due_date: dateValue || null })
-      .eq("request_document_id", requestDocumentId);
+      .eq("request_document_id", doc.requestDocumentId);
 
     if (updateError) {
       setError(updateError.message);
@@ -510,7 +669,7 @@ export default function Requests() {
           ? {
               ...r,
               documents: r.documents.map(rd =>
-                rd.request_document_id === requestDocumentId
+                rd.request_document_id === doc.requestDocumentId
                   ? { ...rd, due_date: dateValue || null }
                   : rd
               ),
@@ -526,6 +685,16 @@ export default function Requests() {
     () => requests.find(r => r.id === selectedId) || null,
     [requests, selectedId]
   );
+
+  // Student profile view (opened by clicking a student name)
+  if (profileStudentId !== null) {
+    return (
+      <StudentProfile
+        studentId={profileStudentId}
+        onBack={() => setProfileStudentId(null)}
+      />
+    );
+  }
 
   return (
     <>
@@ -556,7 +725,7 @@ export default function Requests() {
           <div className="req-summary-accent" />
         </div>
         <div className="req-summary-card-gold">
-          <p className="req-summary-label-gold">Due Today</p>
+          <p className="req-summary-label-gold">Release Today</p>
           <p className="req-summary-value-white">{dueTodayRequests}</p>
           <div className="req-summary-accent-white" />
         </div>
@@ -596,7 +765,7 @@ export default function Requests() {
               <th className="req-th">Student Name</th>
               <th className="req-th">Requested Docs</th>
               <th className="req-th">Request Date</th>
-              <th className="req-th">Due Date</th>
+              <th className="req-th">Release Date</th>
               <th className="req-th">Remarks</th>
               <th className="req-th">Status</th>
               <th className="req-th">Action</th>
@@ -620,10 +789,23 @@ export default function Requests() {
                 >
                   <td className="req-td-first">{r.displayId}</td>
                   <td className="req-td-id">{r.studentId}</td>
-                  <td className="req-td-name">{r.studentName}</td>
+                  <td className="req-td-name">
+                    {/* Clicking the name opens the student profile */}
+                    <button
+                      type="button"
+                      className="text-left font-medium text-[#1f1d70] hover:underline"
+                      title="Open student profile"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openStudent(r.studentId);
+                      }}
+                    >
+                      {r.studentName}
+                    </button>
+                  </td>
                   <td className="req-td-docs">
                     {r.docs.map(doc => (
-                      <span key={doc.requestDocumentId} className="req-doc-tag">{doc.name}</span>
+                      <span key={doc.requestDocumentId ?? `v-${doc.documentId}`} className="req-doc-tag">{doc.name}</span>
                     ))}
                   </td>
                   <td className="req-td">{formatDate(r.requestDate)}</td>
@@ -634,11 +816,17 @@ export default function Requests() {
                   </td>
                   <td className="req-td" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-2">
-                      
                       {r.status === "Pending" ? (
                         <button
                           className="req-complete-btn"
-                          disabled={updatingId === r.id}
+                          // Remove "|| r.credentials?.complete === false" if staff may
+                          // complete requests even when credentials are incomplete.
+                          disabled={updatingId === r.id || r.credentials?.complete === false}
+                          title={
+                            r.credentials?.complete === false
+                              ? `Incomplete credentials – missing: ${r.credentials.missing.join(", ")}`
+                              : undefined
+                          }
                           onClick={() => handleComplete(r.id)}
                         >
                           {updatingId === r.id ? "Saving…" : "Complete"}
@@ -658,7 +846,6 @@ export default function Requests() {
       {/* Pagination */}
       {!loading && filtered.length > 0 && (
         <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 px-1 pt-4 sm:flex-row sm:items-center sm:justify-between">
-
           {/* Pagination Info */}
           <span className="text-xs font-medium text-gray-500">
             Showing{" "}
@@ -677,7 +864,6 @@ export default function Requests() {
 
           {/* Pagination Controls */}
           <div className="flex items-center gap-1.5">
-            {/* Previous */}
             <button
               onClick={() => goToPage(currentPage - 1)}
               disabled={currentPage === 1}
@@ -686,7 +872,6 @@ export default function Requests() {
               Prev
             </button>
 
-            {/* Page Numbers */}
             <div className="flex items-center gap-1">
               {Array.from({ length: totalPages }, (_, idx) => idx + 1)
                 .filter(
@@ -699,7 +884,6 @@ export default function Requests() {
                   if (idx > 0 && p - arr[idx - 1] > 1) {
                     acc.push("...");
                   }
-
                   acc.push(p);
                   return acc;
                 }, [])
@@ -727,7 +911,6 @@ export default function Requests() {
                 )}
             </div>
 
-            {/* Next */}
             <button
               onClick={() => goToPage(currentPage + 1)}
               disabled={currentPage === totalPages}
@@ -745,6 +928,7 @@ export default function Requests() {
           onClose={() => setSelectedId(null)}
           onSetDueDate={handleSetDueDate}
           onCancel={handleCancel}
+          onViewStudent={openStudent}
           cancelling={updatingId === selectedRequest.id}
         />
       )}

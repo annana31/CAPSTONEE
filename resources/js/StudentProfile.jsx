@@ -787,12 +787,7 @@ export default function StudentProfile({ studentId, onBack }) {
                         Preview
                       </button>
                     ) : (
-                      <button
-                        className="cred-upload-btn"
-                        onClick={() => scanner.open(cred)}
-                      >
-                        Scan
-                      </button>
+                      <span className="text-gray-300">—</span>
                     )}
                   </td>
                 </tr>
