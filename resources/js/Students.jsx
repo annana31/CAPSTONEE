@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 import { useAuth } from "./AuthContext"; // RBAC
 import { PERMISSIONS } from "./rbac"; // RBAC
+import { logActivity } from "./activityLog"; // ADDED
 
 const yearLevels = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
 const statuses = ["Active", "LOA", "Inactive", "Graduated"];
@@ -396,6 +397,13 @@ export default function Students({ onViewStudent }) {
 
         return;
       }
+
+      // ADDED: record in Audit Logs
+      logActivity({
+        type: "Update",
+        description: `Added new student ${generatedId} (${form.first_name} ${form.last_name})`,
+        module: "Students Module",
+      });
 
       await fetchStudents();
 

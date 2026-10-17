@@ -86,16 +86,16 @@ export default function StudentPreview({ onBack }) {
   });
   const [preErrors, setPreErrors] = useState({});
 
-  // ── Main form state (backend-driven, unchanged) ──────────────
+  // ── Main form state ──────────────────────────────────────────
   const [formStudentId, setFormStudentId] = useState("");
   const [fullName,      setFullName]      = useState("");
   const [email,         setEmail]         = useState("");
   const [course,        setCourse]        = useState("");
   const [yearLevel,     setYearLevel]     = useState("");
   const [purpose,       setPurpose]       = useState("");
-  const [studentFound,  setStudentFound]  = useState(false);
+  // REMOVED: studentFound state (no more automatic lookup)
 
-  const [requestType, setRequestType] = useState("CAV Certification");
+  const [requestType, setRequestType] = useState(""); // CHANGED: no default request type
   const [cavChoice,   setCavChoice]   = useState("");
   const [cavOther,    setCavOther]    = useState("");
   const [certChoice,  setCertChoice]  = useState("");
@@ -107,13 +107,12 @@ export default function StudentPreview({ onBack }) {
   // ── Validation errors for the main form ──────────────────────
   const [mainErrors, setMainErrors] = useState({});
 
-  const [submitting,      setSubmitting]      = useState(false);
-  const [fetchingStudent, setFetchingStudent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  // REMOVED: fetchingStudent state (no more automatic lookup)
 
-  // ── Style helpers (validation-aware + read-only) ─────────────
+  // ── Style helpers (validation-aware) ─────────────────────────
   const inputClass = (hasError) =>
     `border ${hasError ? "border-red-400 bg-red-50" : "border-gray-300"} p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm w-full`;
-  const readOnlyClass = "border border-gray-200 p-3 rounded-lg text-sm w-full bg-gray-50 text-gray-500 cursor-not-allowed";
   const selectClass = (hasError) =>
     `w-full border ${hasError ? "border-red-400 bg-red-50" : "border-gray-300"} p-3 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-[#D4A017] text-sm bg-white`;
   const labelClass = "block text-xs font-bold text-[#0A2342] uppercase tracking-widest mb-1.5";
@@ -156,8 +155,7 @@ export default function StudentPreview({ onBack }) {
   const resetForm = () => {
     setFormStudentId(""); setFullName(""); setEmail("");
     setCourse(""); setYearLevel(""); setPurpose("");
-    setStudentFound(false);
-    setRequestType("CAV Certification");
+    setRequestType(""); // CHANGED: no default request type
     setCavChoice(""); setCavOther("");
     setCertChoice(""); setCertOther("");
     setSubjectSem(""); setSubjectSY1(""); setSubjectSY2("");
@@ -178,27 +176,7 @@ export default function StudentPreview({ onBack }) {
     setStep("pre");
   };
 
-  // ── Fetch student info (backend, unchanged) ──────────────────
-  const fetchStudent = async (id) => {
-    if (!id.trim()) return;
-    setFetchingStudent(true);
-    try {
-      const res = await axios.get(`/api/student/${id}`);
-      const s = res.data;
-      const name = [s.first_name, s.middle_name, s.last_name].filter(Boolean).join(" ");
-      setFullName(name);
-      setEmail(s.email ?? "");
-      setCourse(s.program_name ?? "");
-      setYearLevel(yearLevelMap[s.year_level] ?? "");
-      setStudentFound(true);
-    } catch {
-      setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
-      setStudentFound(false);
-      alert("Student not found. Please check the Student ID.");
-    } finally {
-      setFetchingStudent(false);
-    }
-  };
+  // REMOVED: fetchStudent (the automatic lookup that filled the form)
 
   // ── Search requests (backend, unchanged) ─────────────────────
   const searchRequest = async () => {
@@ -260,6 +238,11 @@ export default function StudentPreview({ onBack }) {
   const validateMainForm = () => {
     const e = {};
     if (!formStudentId.trim()) e.studentId = true;
+    if (!fullName.trim()) e.fullName = true;
+    if (!email.trim()) e.email = true;
+    if (!course.trim()) e.course = true;
+    if (!yearLevel) e.yearLevel = true;
+    if (!requestType) e.requestType = true; // ADDED
     if (!purpose.trim()) e.purpose = true;
     if (requestType === "CAV Certification" && !cavChoice) e.cavChoice = true;
     if (requestType === "CAV Certification" && cavChoice === "Other" && !cavOther.trim()) e.cavOther = true;
@@ -276,14 +259,14 @@ export default function StudentPreview({ onBack }) {
     return e;
   };
 
-  // ── Submit request (backend, unchanged aside from validation gate) ─
+  // ── Submit request ───────────────────────────────────────────
   const submitRequest = async () => {
     const e = validateMainForm();
     if (Object.keys(e).length > 0) { setMainErrors(e); return; }
     setMainErrors({});
 
     if (!formStudentId.trim()) return alert("Please enter a Student ID.");
-    if (!studentFound)         return alert("Please enter a valid Student ID to auto-fill your details.");
+    // REMOVED: the "valid Student ID to auto-fill" check (no more lookup)
     if (!purpose.trim())       return alert("Please state the purpose of your request.");
 
     const docId = documentIdMap[requestType];
@@ -423,7 +406,7 @@ export default function StudentPreview({ onBack }) {
             </button>
           </div>
           <button
-            onClick={() => { setShowForm(!showForm); setStep("pre"); }}
+            onClick={() => { resetForm(); setShowForm(!showForm); }} // CHANGED: clears the form every time it is opened or hidden
             className="mt-4 text-[#D4A017] font-semibold text-sm hover:underline"
           >
             {showForm ? "— Hide Form" : "+ Submit Request"}
@@ -642,7 +625,7 @@ export default function StudentPreview({ onBack }) {
 
             <div className="grid md:grid-cols-2 gap-5">
 
-              {/* Student ID (form) — triggers backend lookup */}
+              {/* Student ID (form) — no automatic lookup, no "Found" message */}
               <div className="md:col-span-2">
                 <label className={labelClass}>Student ID <Req /></label>
                 <div className="flex gap-3">
@@ -652,69 +635,68 @@ export default function StudentPreview({ onBack }) {
                     value={formStudentId}
                     onChange={e => {
                       setFormStudentId(e.target.value);
-                      setStudentFound(false);
-                      setFullName(""); setEmail(""); setCourse(""); setYearLevel("");
                       setMainErrors(p => ({ ...p, studentId: false }));
                     }}
-                    onBlur={() => fetchStudent(formStudentId)}
-                    onKeyDown={e => e.key === "Enter" && fetchStudent(formStudentId)}
                   />
-                  {fetchingStudent && (
-                    <span className="self-center text-xs text-gray-400 whitespace-nowrap">
-                      Looking up…
-                    </span>
-                  )}
-                  {studentFound && (
-                    <span className="self-center text-xs text-green-600 font-semibold whitespace-nowrap">
-                      ✓ Found
-                    </span>
-                  )}
                 </div>
                 <ErrMsg show={mainErrors.studentId} />
               </div>
 
-              {/* Full Name — read only */}
+              {/* Full Name — typed in manually */}
               <div>
-                <label className={labelClass}>Full Name</label>
+                <label className={labelClass}>Full Name <Req /></label>
                 <input
-                  className={readOnlyClass}
+                  className={inputClass(mainErrors.fullName)}
                   value={fullName}
-                  placeholder="Auto-filled from Student ID"
-                  readOnly
+                  placeholder="Enter your full name"
+                  autoComplete="off" // ADDED
+                  onChange={e => { setFullName(e.target.value); setMainErrors(p => ({ ...p, fullName: false })); }}
                 />
+                <ErrMsg show={mainErrors.fullName} />
               </div>
 
-              {/* Email — read only */}
+              {/* Email — typed in manually */}
               <div>
-                <label className={labelClass}>Email Address</label>
+                <label className={labelClass}>Email Address <Req /></label>
                 <input
-                  className={readOnlyClass}
+                  type="email"
+                  className={inputClass(mainErrors.email)}
                   value={email}
-                  placeholder="Auto-filled from Student ID"
-                  readOnly
+                  placeholder="Enter your email address"
+                  autoComplete="off" // ADDED
+                  onChange={e => { setEmail(e.target.value); setMainErrors(p => ({ ...p, email: false })); }}
                 />
+                <ErrMsg show={mainErrors.email} />
               </div>
 
-              {/* Course — read only */}
+              {/* Course — typed in manually */}
               <div>
-                <label className={labelClass}>Course</label>
+                <label className={labelClass}>Course <Req /></label>
                 <input
-                  className={readOnlyClass}
+                  className={inputClass(mainErrors.course)}
                   value={course}
-                  placeholder="Auto-filled from Student ID"
-                  readOnly
+                  placeholder="Enter your course"
+                  autoComplete="off" // ADDED
+                  onChange={e => { setCourse(e.target.value); setMainErrors(p => ({ ...p, course: false })); }}
                 />
+                <ErrMsg show={mainErrors.course} />
               </div>
 
-              {/* Year Level — read only */}
+              {/* Year Level — chosen manually */}
               <div>
-                <label className={labelClass}>Year Level</label>
-                <input
-                  className={readOnlyClass}
-                  value={yearLevel}
-                  placeholder="Auto-filled from Student ID"
-                  readOnly
-                />
+                <label className={labelClass}>Year Level <Req /></label>
+                <div className="relative">
+                  <select
+                    className={selectClass(mainErrors.yearLevel)}
+                    value={yearLevel}
+                    onChange={e => { setYearLevel(e.target.value); setMainErrors(p => ({ ...p, yearLevel: false })); }}
+                  >
+                    <option value="">Select Year Level</option>
+                    {Object.values(yearLevelMap).map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
+                </div>
+                <ErrMsg show={mainErrors.yearLevel} />
               </div>
 
               {/* Request Type */}
@@ -722,7 +704,7 @@ export default function StudentPreview({ onBack }) {
                 <label className={labelClass}>Request Type <Req /></label>
                 <div className="relative">
                   <select
-                    className={selectClass(false)}
+                    className={selectClass(mainErrors.requestType)} // CHANGED: shows the error state
                     value={requestType}
                     onChange={e => {
                       setRequestType(e.target.value);
@@ -732,12 +714,14 @@ export default function StudentPreview({ onBack }) {
                       setMainErrors({});
                     }}
                   >
+                    <option value="">Select Request Type</option> {/* ADDED */}
                     {requestTypes.map(r => (
                       <option key={r.value} value={r.value}>{r.label}</option>
                     ))}
                   </select>
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400 text-xs">▼</div>
                 </div>
+                <ErrMsg show={mainErrors.requestType} /> {/* ADDED */}
               </div>
 
               {/* CAV sub-choice */}
@@ -868,7 +852,7 @@ export default function StudentPreview({ onBack }) {
 
             <button
               onClick={submitRequest}
-              disabled={submitting || !studentFound}
+              disabled={submitting}
               className="mt-6 bg-[#D4A017] text-white px-8 py-3 rounded-xl font-semibold hover:bg-[#b8891a] transition disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {submitting ? "Submitting…" : "Submit Request"}

@@ -48,7 +48,7 @@ class ReportsController extends Controller
 
         // Completed requests
         $completedRequests = DB::table('tbl_request_document')
-            ->where('status', 'completed')
+            ->whereRaw('LOWER(status) = ?', ['completed']) // CHANGED: case-insensitive ("Completed" is what the app saves)
             ->count();
 
         // Resolution rate = completed / total requests

@@ -162,6 +162,43 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
     return () => { isMounted = false; };
   }, []);
 
+  // ADDED: live updates for Recent Activities (same idea as Audit Logs).
+  // Any new, changed or deleted row in tbl_system_activity re-fetches the
+  // latest 6 staff activities (admin activity stays hidden).
+  useEffect(() => {
+    const fetchLatestActivities = async () => {
+      const { data, error } = await supabase
+        .from("tbl_system_activity")
+        .select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( username, user_role )`)
+        .neq("tbl_staff.user_role", "Admin")
+        .order("date_time", { ascending: false })
+        .limit(6);
+
+      if (error || !data) return;
+
+      setActivities(data.map((a) => ({
+        staff: a.tbl_staff?.username || "Unknown Staff",
+        action: a.activity_description,
+        student: a.module_name,
+        date: a.date_time ? new Date(a.date_time).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" }) : "—",
+        time: a.date_time ? new Date(a.date_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "",
+      })));
+    };
+
+    const channel = supabase
+      .channel("realtime:admin-dashboard-activities")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tbl_system_activity" },
+        fetchLatestActivities
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const totalCreds = credentialDist.reduce((s, c) => s + c.value, 0);
   const resolutionRate = stats.totalRequestDocs > 0 ? Math.round((stats.completedRequests / stats.totalRequestDocs) * 1000) / 10 : 0;
 

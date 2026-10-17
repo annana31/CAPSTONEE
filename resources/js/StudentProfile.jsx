@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 import DocumentScanner from "./DocumentScanner.jsx";
 import useDocumentScanner from "./useDocumentScanner";
 import { isPdf } from "./scannerUtils";
+import { logActivity } from "./activityLog"; // ADDED
 import "./styles/Students.css";
 import "./styles/StudentProfile.css";
 import "./styles/Dashboard.css";
@@ -327,6 +328,13 @@ export default function StudentProfile({ studentId, onBack }) {
 
         if (insertError) throw insertError;
 
+        // ADDED: record in Audit Logs
+        logActivity({
+          type: "Upload",
+          description: `Scanned and saved ${typeName} for student ${sid}`,
+          module: "Documents Module",
+        });
+
         // reload from the database so the document appears in its own
         // row (e.g. Birth Certificate) with the saved folder path
         await loadDocuments(sid);
@@ -488,6 +496,13 @@ export default function StudentProfile({ studentId, onBack }) {
 
       if (updateError) throw updateError;
 
+      // ADDED: record in Audit Logs
+      logActivity({
+        type: "Update",
+        description: `Updated information of student ${editForm.student_id}`,
+        module: "Students Module",
+      });
+
       setStudent(data);
       setEditForm(data);
       setShowEditModal(false);
@@ -609,6 +624,13 @@ export default function StudentProfile({ studentId, onBack }) {
       preview_error: previewError,
     });
     setShowPreviewModal(true);
+
+    // ADDED: record in Audit Logs
+    logActivity({
+      type: "View",
+      description: `Viewed ${cred.name} of student ${student.student_id}`,
+      module: "Documents Module",
+    });
   };
 
   // ============================================================
