@@ -13,11 +13,11 @@ class StoreStaffRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
-            'fullName' => ['required', 'string', 'max:50', 'unique:tbl_staff,username'],
-            'email'    => ['required', 'email', 'max:100', 'unique:tbl_staff,email'],
-            'password' => ['required', 'string', 'max:24'],
-            // status is NOT included here — system sets it automatically on login/logout
+    return [
+        'idNumber' => ['required', 'string', 'max:50', 'unique:tbl_staff,username'],
+        'fullName' => ['required', 'string', 'max:50'],
+        'email'    => ['required', 'email', 'max:100', 'unique:tbl_staff,email'],
+        'password' => ['required', 'string', 'min:6', 'max:24'],
         ];
     }
 }

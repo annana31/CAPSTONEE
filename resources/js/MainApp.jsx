@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react"; // CHANGED: added useRef
 import Login from "./Login";
 import Dashboard from "./Dashboard";
 import Students from "./Students";
@@ -204,6 +204,8 @@ export default function App() {
     savedStaff ? normalizeRole(savedStaff.user_role) : null
   );
 
+  const loggingOutRef = useRef(false); // ADDED: true while the normal logout button is running
+
   // =====================================================
   // HANDLE ACTIVE PAGE CHANGE (persists to localStorage)
   // =====================================================
@@ -332,11 +334,20 @@ export default function App() {
   // ADDED: keep the stored API token in sync with the Supabase
   // session. Supabase access tokens are refreshed automatically,
   // so every refreshed token is saved for the Laravel API calls.
+  // CHANGED: if Supabase ends the session on its own (refresh failed
+  // or revoked), set the staff to Inactive and return to the login screen.
   // =====================================================
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (session?.access_token) setAuthToken(session.access_token);
+        else if (event === "SIGNED_OUT" && !loggingOutRef.current) {
+          clearAuthToken();
+          let id = null;
+          try { id = JSON.parse(localStorage.getItem("regisscan_staff"))?.staff_id; } catch { /* ignore */ }
+          if (id) fetch(`${API_BASE}/staff/${id}/logout`, { method: "POST" }).catch(() => {});
+          clearSessionState();
+        }
       }
     );
 
@@ -445,6 +456,8 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    loggingOutRef.current = true; // ADDED
+
     try {
       await revokeApiToken(); // RBAC: invalidate the API token on the server
     } catch (error) {
@@ -472,6 +485,7 @@ export default function App() {
 
     // Even if the calls above failed, always clear the local session.
     clearSessionState();
+    loggingOutRef.current = false; // ADDED
   };
 
   // =====================================================
@@ -580,6 +594,7 @@ export default function App() {
         activePage={activePage}
         setActivePage={navigate}
         onLogout={handleLogout}
+        onViewStudent={viewStudentProfile}
       >
         <ProtectedPage page={activePage}>
           {renderPage()}

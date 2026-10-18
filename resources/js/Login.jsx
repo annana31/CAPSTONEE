@@ -28,7 +28,7 @@ export default function Login({ onLogin, onStudentAccess }) {
     try {
       const { data, error: dbError } = await supabase
         .from("tbl_staff")
-        .select("staff_id, user_role, username, email, status") // CHANGED: "password" -> "email"
+        .select("staff_id, user_role, username, name, email, status") // CHANGED (name): added "name"
         .eq("username", inputUsername)
         .maybeSingle();
 
@@ -68,6 +68,10 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
+      // ADDED (name): the dashboards show the "name" column.
+      // Falls back to the username only if a row has no name yet.
+      const displayName = data.name || data.username;
+
       try {
         const response = await fetch(
           `${API_BASE}/staff/${data.staff_id}/login`,
@@ -86,7 +90,7 @@ export default function Login({ onLogin, onStudentAccess }) {
         .insert({
           staff_id: data.staff_id,
           activity_type: "login",
-          activity_description: `${data.username} logged in`,
+          activity_description: `${displayName} logged in`, // CHANGED (name): was ${data.username}
           module_name: "Authentication",
           date_time: new Date().toISOString(),
           status: "success",
@@ -100,7 +104,7 @@ export default function Login({ onLogin, onStudentAccess }) {
       // (replaces: const apiToken = await requestApiToken(inputUsername, inputPassword);)
       setAuthToken(authData.session.access_token);
 
-      onLogin(data.username, data.user_role, Number(data.staff_id));
+      onLogin(displayName, data.user_role, Number(data.staff_id)); // CHANGED (name): was data.username
     } catch (err) {
       console.error("Login failed:", err);
       setError("Something went wrong. Please try again.");

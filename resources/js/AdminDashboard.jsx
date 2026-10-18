@@ -102,7 +102,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
           supabase.from("tbl_request_document").select("*", { count: "exact", head: true }).ilike("status", "Completed"),
           supabase.from("tbl_request_document").select("*", { count: "exact", head: true }),
           supabase.from("tbl_student_documents").select("document_name, date_uploaded, status"),
-          supabase.from("tbl_system_activity").select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( username, user_role )`)
+          supabase.from("tbl_system_activity").select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( name, username, user_role )`) // CHANGED (name)
             .neq("tbl_staff.user_role", "Admin")
             .order("date_time", { ascending: false }).limit(6),
         ]);
@@ -134,7 +134,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
           .sort((a, b) => b.value - a.value);
 
         const mappedActivities = (activitiesRes.data || []).map((a) => ({
-          staff: a.tbl_staff?.username || "Unknown Staff",
+          staff: a.tbl_staff?.name || a.tbl_staff?.username || "Unknown Staff", // CHANGED (name)
           action: a.activity_description,
           student: a.module_name,
           date: a.date_time ? new Date(a.date_time).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" }) : "—",
@@ -169,7 +169,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
     const fetchLatestActivities = async () => {
       const { data, error } = await supabase
         .from("tbl_system_activity")
-        .select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( username, user_role )`)
+        .select(`activity_id, activity_type, activity_description, module_name, date_time, status, tbl_staff!inner ( name, username, user_role )`) // CHANGED (name)
         .neq("tbl_staff.user_role", "Admin")
         .order("date_time", { ascending: false })
         .limit(6);
@@ -177,7 +177,7 @@ export default function AdminDashboard({ staffName = "Admin", onLogout, activePa
       if (error || !data) return;
 
       setActivities(data.map((a) => ({
-        staff: a.tbl_staff?.username || "Unknown Staff",
+        staff: a.tbl_staff?.name || a.tbl_staff?.username || "Unknown Staff", // CHANGED (name)
         action: a.activity_description,
         student: a.module_name,
         date: a.date_time ? new Date(a.date_time).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" }) : "—",

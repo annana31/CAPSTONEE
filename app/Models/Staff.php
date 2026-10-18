@@ -11,7 +11,8 @@ class Staff extends Model
     public    $timestamps = false;
 
     protected $fillable = [
-        'username',   // stores full name
+        'username',   // login ID (hyphen format)
+        'name',       // staff full name shown in the dashboards
         'email',
         'user_role',
         'password',

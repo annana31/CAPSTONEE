@@ -21,13 +21,13 @@ const LOG_SELECT = `
   module_name,
   date_time,
   status,
-  tbl_staff!inner ( username, user_role )
-`; // CHANGED: inner join + user_role, so admin activity can be filtered out
+  tbl_staff!inner ( name, username, user_role )
+`; // CHANGED (name): added "name"
 
 const mapLogRow = (row) => ({
   id: row.activity_id,
   timestamp: row.date_time,
-  name: row.tbl_staff?.username || "Unknown Staff",
+  name: row.tbl_staff?.name || row.tbl_staff?.username || "Unknown Staff", // CHANGED (name)
   type: row.activity_type,
   description: row.activity_description,
   module: row.module_name,

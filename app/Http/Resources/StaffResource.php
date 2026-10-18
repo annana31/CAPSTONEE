@@ -10,7 +10,8 @@ class StaffResource extends JsonResource
     {
         return [
             'id'        => $this->staff_code,
-            'fullName'  => $this->username,
+            'username'  => $this->username, // ADDED (id): the ID number, used by the edit form
+            'fullName'  => $this->name ?: $this->username, // CHANGED (name): shows "name", falls back to username if empty
             'email'     => $this->email,
             'role'      => $this->user_role,
             'status'    => $this->status,

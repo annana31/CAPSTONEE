@@ -4,7 +4,7 @@ import { authHeaders } from "./rbac"; // RBAC
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || "http://localhost:8000/api";
 
-const EMPTY_FORM = { fullName: "", email: "", password: "" };
+const EMPTY_FORM = { idNumber: "", fullName: "", email: "", password: "" }; // CHANGED (id): added idNumber
 const ROWS_PER_PAGE = 10;
 
 function getInitials(name) {
@@ -72,7 +72,7 @@ export default function StaffAccounts() {
 
   function openEdit(s) {
     setEditTarget(s);
-    setForm({ fullName: s.fullName, email: s.email || "", password: "" });
+    setForm({ idNumber: s.username || "", fullName: s.fullName, email: s.email || "", password: "" }); // CHANGED (id): fills in the current ID number
     setFormError(null);
     setModalOpen(true);
   }
@@ -86,6 +86,7 @@ export default function StaffAccounts() {
 
   // ── Save ─────────────────────────────────────────────────────────────
   async function handleSave() {
+    if (!form.idNumber.trim()) { setFormError("ID number is required."); return; } // CHANGED (id): now required when editing too
     if (!form.fullName.trim()) { setFormError("Full name is required."); return; }
     if (!form.email.trim())    { setFormError("Email is required."); return; }
     if (!editTarget && !form.password.trim()) { setFormError("Password is required for new staff."); return; }
@@ -355,6 +356,15 @@ export default function StaffAccounts() {
               {formError && (
                 <p style={{ color: "#b91c1c", fontSize: 13, marginBottom: 12 }}>{formError}</p>
               )}
+              {/* CHANGED (id): ID number now shows when adding and editing (saved in the username column, used to log in) */}
+              <div className="sa-form-group">
+                <label className="sa-label">ID Number</label>
+                <input
+                  className="sa-input" type="text" placeholder="e.g. 01-20-2023"
+                  value={form.idNumber}
+                  onChange={e => setForm(f => ({ ...f, idNumber: e.target.value }))}
+                />
+              </div>
               <div className="sa-form-group">
                 <label className="sa-label">Full Name</label>
                 <input
