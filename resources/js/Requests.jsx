@@ -196,10 +196,13 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
             <DetailRow label="Previous Request Date" value={formatDate(r.previousRequestDate)} />
             <DetailRow label="Cleared" value={yesNo(r.isCleared)} />
 
-            <DetailRow label="Agency" value={r.agency === "Other" ? r.agencyOther : r.agency} />
+            <DetailRow
+              label="Agency"
+              value={/^other/i.test(r.agency || "") ? (r.agencyOther || r.agency) : r.agency}
+            />
             <DetailRow
               label="Certification Type"
-              value={r.certificationType === "Other" ? r.certificationOther : r.certificationType}
+              value={/^other/i.test(r.certificationType || "") ? (r.certificationOther || r.certificationType) : r.certificationType}
             />
             <DetailRow label="Subject Semester" value={r.subjectSemester} />
             <DetailRow
@@ -775,4 +778,4 @@ export default function Requests() {
       )}
     </>
   );
-} 
+}
