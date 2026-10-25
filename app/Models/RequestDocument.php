@@ -22,8 +22,8 @@ class RequestDocument extends Model
 
         'request_id',
         'document_id',
-        'status'
-
+        'status',
+        'rejection_reason'
     ];
 
 

@@ -194,9 +194,10 @@ export default function StudentPreview({ onBack }) {
           request_document_id,
           status,
           due_date,
+          rejection_reason,
           document:tbl_documents ( document_name )
         )
-      `)
+      `) // CHANGED (reject): added rejection_reason
       .eq("student_id", Number(studentId))
       .order("date_request", { ascending: false });
 
@@ -218,6 +219,7 @@ export default function StudentPreview({ onBack }) {
             document_name: rd.document?.document_name ?? r.main_doc?.document_name ?? "Document",
             status: rd.status || "Pending",
             due_date: rd.due_date,
+            rejection_reason: rd.rejection_reason, // ADDED (reject)
           });
         });
       } else {
@@ -228,6 +230,7 @@ export default function StudentPreview({ onBack }) {
           document_name: r.main_doc?.document_name ?? "Document",
           status: "Pending",
           due_date: null,
+          rejection_reason: null, // ADDED (reject)
         });
       }
     });
@@ -880,18 +883,27 @@ export default function StudentPreview({ onBack }) {
                         <p className="text-gray-400 text-xs mt-0.5">
                           Submitted: {new Date(request.date_request).toLocaleDateString()}
                         </p>
-                        {/* Release date (new) — from tbl_request_document.due_date */}
-                        <p className="text-xs mt-0.5 font-semibold text-[#0A2342]">
-                          Release Date:{" "}
-                          <span className={request.due_date ? "text-[#D4A017]" : "text-gray-400 font-normal"}>
-                            {formatReleaseDate(request.due_date)}
-                          </span>
-                        </p>
+                        {/* CHANGED (reject): rejected requests show the reason instead of the release date */}
+                        {request.status === "Rejected" ? (
+                          <p className="text-xs mt-0.5 font-semibold text-[#0A2342]">
+                            Reason:{" "}
+                            <span className="text-red-600 font-normal">
+                              {request.rejection_reason || "No reason provided"}
+                            </span>
+                          </p>
+                        ) : (
+                          <p className="text-xs mt-0.5 font-semibold text-[#0A2342]">
+                            Release Date:{" "}
+                            <span className={request.due_date ? "text-[#D4A017]" : "text-gray-400 font-normal"}>
+                              {formatReleaseDate(request.due_date)}
+                            </span>
+                          </p>
+                        )}
                       </div>
                       <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide ${
                         request.status === "Completed" || request.status === "Approved"
                           ? "bg-green-100 text-green-700"
-                          : request.status === "Cancelled"
+                          : request.status === "Rejected"
                           ? "bg-red-100 text-red-700"
                           : "bg-yellow-100 text-yellow-700"
                       }`}>

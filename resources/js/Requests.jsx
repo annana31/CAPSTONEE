@@ -8,14 +8,17 @@ const PAGE_SIZE = 10;
 
 function deriveStatus(docs) {
   if (docs.length === 0) return "Pending";
-  if (docs.every(d => d.status === "Cancelled")) return "Cancelled";
-  if (docs.every(d => d.status === "Completed" || d.status === "Cancelled")) return "Completed";
+  if (docs.every(d => d.status === "Rejected")) return "Rejected";
+  if (docs.every(d => d.status === "Completed" || d.status === "Rejected")) return "Completed";
   return "Pending";
 }
 
 function deriveRemarks(docs) {
-  const pending = docs.filter(d => d.status !== "Completed" && d.status !== "Cancelled");
-  if (pending.length === 0) return "Ready for claiming";
+  const pending = docs.filter(d => d.status !== "Completed" && d.status !== "Rejected");
+  if (pending.length === 0) {
+    if (docs.length > 0 && docs.every(d => d.status === "Rejected")) return "Request rejected";
+    return "Ready for claiming";
+  }
   return pending.map(d => `${d.name}: ${d.status || "Pending"}`).join(", ");
 }
 
@@ -26,19 +29,52 @@ function todayStr() {
 
 function isDocDue(doc) {
   if (!doc.dueDate) return false;
-  if (doc.status === "Completed" || doc.status === "Cancelled") return false;
+  if (doc.status === "Completed" || doc.status === "Rejected") return false;
   return doc.dueDate <= todayStr();
 }
 
 function isDocOverdue(doc) {
   if (!doc.dueDate) return false;
-  if (doc.status === "Completed" || doc.status === "Cancelled") return false;
+  if (doc.status === "Completed" || doc.status === "Rejected") return false;
   return doc.dueDate < todayStr();
 }
 
 function earliestDueDate(docs) {
   const dates = docs.map(d => d.dueDate).filter(Boolean).sort();
   return dates[0] || null;
+}
+
+// ADDED: helpers for the "Filter by due" dropdown
+function addDays(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function matchesDueFilter(request, filter) {
+  if (!filter) return true;
+  const today = todayStr();
+  // Only documents still waiting to be released count as "due"
+  const active = request.docs.filter(d => d.status !== "Completed" && d.status !== "Rejected");
+  const dates = active.map(d => d.dueDate).filter(Boolean).map(d => String(d).slice(0, 10));
+
+  if (filter === "none") return active.some(d => !d.dueDate);
+
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sunday
+  const endThisWeek = addDays(today, (7 - dow) % 7);      // this Sunday
+  const startNextWeek = addDays(endThisWeek, 1);          // next Monday
+  const endNextWeek = addDays(endThisWeek, 7);            // next Sunday
+  const [y, m] = today.split("-").map(Number);
+  const endThisMonth = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+
+  switch (filter) {
+    case "overdue":  return dates.some(d => d < today);
+    case "today":    return dates.some(d => d === today);
+    case "week":     return dates.some(d => d >= today && d <= endThisWeek);
+    case "nextweek": return dates.some(d => d >= startNextWeek && d <= endNextWeek);
+    case "month":    return dates.some(d => d >= today && d <= endThisMonth);
+    default:         return true;
+  }
 }
 
 function formatDate(value) {
@@ -71,7 +107,7 @@ const statusClass = (status) => {
   switch (status) {
     case "Pending": return "req-status-pending";
     case "Completed": return "req-status-completed";
-    case "Cancelled": return "req-status-cancelled";
+    case "Rejected": return "req-status-cancelled";
     default: return "req-status-pending";
   }
 };
@@ -90,6 +126,10 @@ function DetailRow({ label, value }) {
 }
 
 function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancelling }) {
+  // ADDED: rejection reason field shown after clicking "Reject Request"
+  const [showReason, setShowReason] = useState(false);
+  const [reason, setReason] = useState("");
+
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === "Escape") onClose();
@@ -213,22 +253,60 @@ function RequestDetailsModal({ request, onClose, onSetDueDate, onCancel, cancell
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
-          {r.status === "Pending" && (
-            <button
-              onClick={() => onCancel(r.id)}
-              disabled={cancelling}
-              className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-4 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-400 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {cancelling ? "Cancelling…" : "Cancel Request"}
-            </button>
+        <div className="border-t border-gray-100 px-6 py-4">
+          {/* ADDED: rejection reason field */}
+          {r.status === "Pending" && showReason && (
+            <div className="mb-3">
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                Rejection Reason
+              </label>
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+                placeholder="Enter the reason for rejecting this request..."
+                disabled={cancelling}
+                autoFocus
+                className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:border-[#1f1d70] focus:outline-none disabled:opacity-50"
+              />
+            </div>
           )}
-          <button
-            onClick={onClose}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-xs font-semibold text-[#1f1d70] shadow-sm transition hover:border-[#1f1d70] hover:bg-[#f7f7fc]"
-          >
-            Close
-          </button>
+
+          <div className="flex justify-end gap-2">
+            {r.status === "Pending" && !showReason && (
+              <button
+                onClick={() => setShowReason(true)}
+                disabled={cancelling}
+                className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-4 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-400 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Reject Request
+              </button>
+            )}
+            {r.status === "Pending" && showReason && (
+              <>
+                <button
+                  onClick={() => { setShowReason(false); setReason(""); }}
+                  disabled={cancelling}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-xs font-semibold text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => onCancel(r.id, reason.trim())}
+                  disabled={cancelling || reason.trim() === ""}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-4 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-400 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {cancelling ? "Rejecting…" : "Confirm Reject"}
+                </button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              className="inline-flex h-9 items-center justify-center rounded-lg border border-gray-200 bg-white px-4 text-xs font-semibold text-[#1f1d70] shadow-sm transition hover:border-[#1f1d70] hover:bg-[#f7f7fc]"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -241,6 +319,7 @@ export default function Requests() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [filterDue, setFilterDue] = useState(""); // ADDED
   const [page, setPage] = useState(1);
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
@@ -402,9 +481,10 @@ export default function Requests() {
         r.studentName.toLowerCase().includes(q) ||
         String(r.studentId).includes(search);
       const matchStatus = filterStatus ? r.status === filterStatus : true;
-      return matchSearch && matchStatus;
+      const matchDue = matchesDueFilter(r, filterDue); // ADDED
+      return matchSearch && matchStatus && matchDue;
     });
-  }, [requests, search, filterStatus]);
+  }, [requests, search, filterStatus, filterDue]);
 
   const totalRequests = requests.length;
   const pendingRequests = requests.filter(r => r.status === "Pending").length;
@@ -415,13 +495,13 @@ export default function Requests() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, filterStatus]);
+  }, [search, filterStatus, filterDue]);
 
   const handleComplete = async (id) => {
     setUpdatingId(id);
     const request = requests.find(r => r.id === id);
     const idsToComplete = (request?.docs || [])
-      .filter(d => d.status !== "Completed" && d.status !== "Cancelled")
+      .filter(d => d.status !== "Completed" && d.status !== "Rejected")
       .map(d => d.requestDocumentId);
 
     if (idsToComplete.length > 0) {
@@ -464,17 +544,18 @@ export default function Requests() {
     setUpdatingId(null);
   };
 
-  const handleCancel = async (id) => {
+  // CHANGED: now takes a rejection reason, saved to tbl_request_document.rejection_reason
+  const handleCancel = async (id, rejectedReason) => {
     setUpdatingId(id);
     const request = requests.find(r => r.id === id);
     const idsToCancel = (request?.docs || [])
-      .filter(d => d.status !== "Completed" && d.status !== "Cancelled")
+      .filter(d => d.status !== "Completed" && d.status !== "Rejected")
       .map(d => d.requestDocumentId);
 
     if (idsToCancel.length > 0) {
       const { error: updateError } = await supabase
         .from("tbl_request_document")
-        .update({ status: "Cancelled" })
+        .update({ status: "Rejected", rejection_reason: rejectedReason })
         .in("request_document_id", idsToCancel);
 
       if (updateError) {
@@ -486,7 +567,7 @@ export default function Requests() {
       // ADDED: record in Audit Logs
       logActivity({
         type: "Update",
-        description: `Cancelled request ${request?.displayId} (${request?.studentName})`,
+        description: `Rejected request ${request?.displayId} (${request?.studentName})`,
         module: "Requests Module",
       });
     }
@@ -501,7 +582,7 @@ export default function Requests() {
               ...r,
               documents: r.documents.map(rd =>
                 idsToCancel.includes(rd.request_document_id)
-                  ? { ...rd, status: "Cancelled" }
+                  ? { ...rd, status: "Rejected", rejection_reason: rejectedReason }
                   : rd
               ),
             }
@@ -607,7 +688,21 @@ export default function Requests() {
           <option value="">All Status</option>
           <option value="Pending">Pending</option>
           <option value="Completed">Completed</option>
-          <option value="Cancelled">Cancelled</option>
+          <option value="Rejected">Rejected</option>
+        </select>
+        {/* ADDED: filter by due date */}
+        <select
+          className="req-select"
+          value={filterDue}
+          onChange={e => setFilterDue(e.target.value)}
+        >
+          <option value="">All Due Dates</option>
+          <option value="overdue">Overdue</option>
+          <option value="today">Due Today</option>
+          <option value="week">Due This Week</option>
+          <option value="nextweek">Due Next Week</option>
+          <option value="month">Due This Month</option>
+          <option value="none">No Due Date</option>
         </select>
       </div>
 
@@ -714,46 +809,10 @@ export default function Requests() {
               Prev
             </button>
 
-            {/* Page Numbers */}
-            <div className="flex items-center gap-1">
-              {Array.from({ length: totalPages }, (_, idx) => idx + 1)
-                .filter(
-                  (p) =>
-                    p === 1 ||
-                    p === totalPages ||
-                    Math.abs(p - currentPage) <= 1
-                )
-                .reduce((acc, p, idx, arr) => {
-                  if (idx > 0 && p - arr[idx - 1] > 1) {
-                    acc.push("...");
-                  }
-
-                  acc.push(p);
-                  return acc;
-                }, [])
-                .map((p, idx) =>
-                  p === "..." ? (
-                    <span
-                      key={`ellipsis-${idx}`}
-                      className="flex h-9 w-8 items-center justify-center text-xs font-medium text-gray-400"
-                    >
-                      …
-                    </span>
-                  ) : (
-                    <button
-                      key={p}
-                      onClick={() => goToPage(p)}
-                      className={`inline-flex h-9 min-w-9 items-center justify-center rounded-lg border px-3 text-xs font-semibold transition-all duration-200 ${
-                        p === currentPage
-                          ? "border-[#1f1d70] bg-[#1f1d70] text-white shadow-sm"
-                          : "border-gray-200 bg-white text-gray-600 hover:border-[#1f1d70] hover:bg-[#f7f7fc] hover:text-[#1f1d70]"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-            </div>
+            {/* Current page number only (changes as you go Prev/Next) */}
+            <span className="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-[#1f1d70] bg-[#1f1d70] px-3 text-xs font-semibold text-white shadow-sm">
+              {currentPage}
+            </span>
 
             {/* Next */}
             <button
