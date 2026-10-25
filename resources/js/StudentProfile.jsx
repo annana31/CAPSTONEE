@@ -343,6 +343,14 @@ export default function StudentProfile({ studentId, onBack }) {
       } catch (err) {
         console.error("Save scanned document failed:", err);
 
+        // ADDED: record the failure in Audit Logs
+        logActivity({
+          type: "Upload",
+          description: `Failed to save scanned document for student ${student.student_id}: ${err.message || "unknown error"}`,
+          module: "Documents Module",
+          status: "failed",
+        });
+
         // don't leave an orphan file behind if the record was not saved
         if (uploadedPath) {
           await supabase.storage.from(BUCKET).remove([uploadedPath]);
@@ -508,6 +516,14 @@ export default function StudentProfile({ studentId, onBack }) {
       setShowEditModal(false);
     } catch (err) {
       console.error("Update error:", err);
+
+      // ADDED: record the failure in Audit Logs
+      logActivity({
+        type: "Update",
+        description: `Failed to update information of student ${editForm.student_id}: ${err.message || "unknown error"}`,
+        module: "Students Module",
+        status: "failed",
+      });
       setError(err.message || "Failed to update student.");
     } finally {
       setSaving(false);
@@ -628,8 +644,11 @@ export default function StudentProfile({ studentId, onBack }) {
     // ADDED: record in Audit Logs
     logActivity({
       type: "View",
-      description: `Viewed ${cred.name} of student ${student.student_id}`,
+      description: previewError
+        ? `Failed to view ${cred.name} of student ${student.student_id}: ${previewError}`
+        : `Viewed ${cred.name} of student ${student.student_id}`,
       module: "Documents Module",
+      status: previewError ? "failed" : "success",
     });
   };
 

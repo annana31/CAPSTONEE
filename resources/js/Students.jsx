@@ -390,6 +390,14 @@ export default function Students({ onViewStudent }) {
           error
         );
 
+        // ADDED: record the failure in Audit Logs
+        logActivity({
+          type: "Update",
+          description: `Failed to add student ${generatedId}: ${error.message}`,
+          module: "Students Module",
+          status: "failed",
+        });
+
         alert(
           "Failed to save student: " +
             error.message

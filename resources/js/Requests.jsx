@@ -511,6 +511,13 @@ export default function Requests() {
         .in("request_document_id", idsToComplete);
 
       if (updateError) {
+        // ADDED: record the failure in Audit Logs
+        logActivity({
+          type: "Update",
+          description: `Failed to complete request ${request?.displayId} (${request?.studentName}): ${updateError.message}`,
+          module: "Requests Module",
+          status: "failed",
+        });
         setError(updateError.message);
         setUpdatingId(null);
         return;
@@ -559,6 +566,13 @@ export default function Requests() {
         .in("request_document_id", idsToCancel);
 
       if (updateError) {
+        // ADDED: record the failure in Audit Logs
+        logActivity({
+          type: "Update",
+          description: `Failed to reject request ${request?.displayId} (${request?.studentName}): ${updateError.message}`,
+          module: "Requests Module",
+          status: "failed",
+        });
         setError(updateError.message);
         setUpdatingId(null);
         return;
@@ -599,6 +613,14 @@ export default function Requests() {
       .eq("request_document_id", requestDocumentId);
 
     if (updateError) {
+      // ADDED: record the failure in Audit Logs
+      const failedRequest = requests.find(r => r.id === requestId);
+      logActivity({
+        type: "Update",
+        description: `Failed to update due date for request ${failedRequest?.displayId}: ${updateError.message}`,
+        module: "Requests Module",
+        status: "failed",
+      });
       setError(updateError.message);
       return;
     }
