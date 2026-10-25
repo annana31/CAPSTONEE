@@ -30,6 +30,12 @@ const ROWS_PER_PAGE = 10;
 const FOLDER_SERVER_URL = "http://127.0.0.1:3001/create-folder";
 const FOLDER_SYNC_URL = "http://127.0.0.1:3001/sync-folders";
 
+// Automatic sync retry settings
+const SYNC_MAX_ATTEMPTS = 3;
+const SYNC_RETRY_DELAY_MS = 3000;
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const buildStudentName = (first, middle, last) =>
   [first, middle, last]
     .map((value) => (value || "").trim())
@@ -37,8 +43,40 @@ const buildStudentName = (first, middle, last) =>
     .join(" ")
     .replace(/\s+/g, " ");
 
+// Every student folder lives in C:\StudentRecords\<College>\<ID>_<Name>
+const STUDENT_RECORDS_ROOT = "C:\\StudentRecords";
+
+const safeFolderPart = (value) =>
+  String(value || "")
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 120);
+
+const buildCollegeFolder = (collegeName) =>
+  safeFolderPart(collegeName).replace(/ /g, "_") || "Unassigned";
+
+const buildStudentFolderPath = (collegeName, studentId, first, middle, last) => {
+  const fullName = safeFolderPart(
+    [first, middle, last].filter((p) => String(p || "").trim()).join(" ")
+  ).replace(/ /g, "_");
+
+  return (
+    `${STUDENT_RECORDS_ROOT}\\${buildCollegeFolder(collegeName)}\\` +
+    `${safeFolderPart(studentId)}_${fullName}`
+  );
+};
+
 // Asks the folder helper to create the student's folder and returns its path
-const createStudentFolder = async (studentId, first, middle, last) => {
+const createStudentFolder = async (
+  collegeName,
+  studentId,
+  first,
+  middle,
+  last
+) => {
   const response = await fetch(FOLDER_SERVER_URL, {
     method: "POST",
     headers: {
@@ -50,6 +88,7 @@ const createStudentFolder = async (studentId, first, middle, last) => {
       first_name: first,
       middle_name: middle || "",
       last_name: last,
+      college_name: collegeName || "",
     }),
   });
 
@@ -62,9 +101,9 @@ const createStudentFolder = async (studentId, first, middle, last) => {
   return result.folder_path;
 };
 
-// Makes sure every existing student has a folder named with the student ID.
-// Old folders are renamed, missing ones are created. The response lists the
-// students whose folder_path changed so it can be saved in the database.
+// Makes sure every existing student has a folder in their college folder.
+// Old folders are moved/renamed, missing ones are created. The response lists
+// the students whose folder_path changed so it can be saved in the database.
 const syncStudentFolders = async (studentList) => {
   const response = await fetch(FOLDER_SYNC_URL, {
     method: "POST",
@@ -132,7 +171,7 @@ export default function Students({ onViewStudent }) {
 
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Makes sure the folder sync runs only once per page load
+  // Makes sure the automatic folder sync runs only once per page load
   const folderSyncDone = useRef(false);
 
   // ============================================================
@@ -267,11 +306,12 @@ export default function Students({ onViewStudent }) {
   }, [fetchStudents]);
 
   // ============================================================
-  // AUTO-CREATE / RENAME FOLDERS FOR EXISTING STUDENTS
-  // Runs once per page load, after students are loaded.
-  // Folders are named "<student_id>_<Name>". Old folders without the ID
-  // are renamed, missing folders are created, and the new folder_path
-  // is saved in tbl_student.
+  // AUTOMATIC FOLDER SYNC
+  // Runs once per page load, as soon as the students are loaded.
+  // Folders live in C:\StudentRecords\<College>\<ID>_<Name>.
+  // Old folders are moved, missing folders are created, and the
+  // new folder_path is saved in tbl_student.
+  // If the helper is not reachable yet, it retries a few times.
   // ============================================================
   useEffect(() => {
     if (loading || folderSyncDone.current || students.length === 0) return;
@@ -282,36 +322,69 @@ export default function Students({ onViewStudent }) {
       first_name: s.first_name,
       middle_name: s.middle_name,
       last_name: s.last_name,
+      college_name: s.department === "—" ? "" : s.department,
       folder_path: s.folder_path,
     }));
 
-    syncStudentFolders(studentList)
-      .then(async (r) => {
-        console.log(
-          `Folder sync: ${r.created} created, ${r.renamed} renamed, ${r.existing} already correct`,
-          r.skipped.length || r.failed.length ? r : ""
-        );
+    const autoSync = async () => {
+      for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt++) {
+        try {
+          const r = await syncStudentFolders(studentList);
 
-        // Save the new folder paths
-        for (const u of r.updates || []) {
-          const { error } = await supabase
-            .from("tbl_student")
-            .update({ folder_path: u.folder_path })
-            .eq("student_id", u.student_id);
+          let saved = 0;
+          let blocked = 0;
 
-          if (error) {
-            console.warn(
-              `Could not save folder path for ${u.student_id}:`,
-              error.message
-            );
+          for (const u of r.updates || []) {
+            const { data, error } = await supabase
+              .from("tbl_student")
+              .update({ folder_path: u.folder_path })
+              .eq("student_id", u.student_id)
+              .select("student_id");
+
+            // No error but no row returned = blocked by RLS or a trigger
+            if (error || !data || data.length === 0) {
+              blocked++;
+              console.warn(
+                `Could not save folder path for ${u.student_id}:`,
+                error?.message || "blocked by RLS or a trigger"
+              );
+            } else {
+              saved++;
+            }
+          }
+
+          console.log(
+            `Folder sync: ${r.created} created, ${r.renamed} moved/renamed, ` +
+              `${r.existing} already correct, ${r.skipped.length} skipped, ` +
+              `${r.failed.length} failed. Paths saved: ${saved}, not saved: ${blocked}`,
+            r.skipped.length || r.failed.length ? r : ""
+          );
+
+          if (saved > 0) {
+            await fetchStudents(false);
+          }
+
+          return; // done
+        } catch (err) {
+          console.warn(
+            `Folder sync attempt ${attempt}/${SYNC_MAX_ATTEMPTS} failed:`,
+            err.message
+          );
+
+          if (attempt < SYNC_MAX_ATTEMPTS) {
+            await wait(SYNC_RETRY_DELAY_MS);
           }
         }
-      })
-      .catch((err) => {
-        // Fails quietly if folder-server.js is not running
-        console.warn("Folder sync skipped:", err.message);
-      });
-  }, [loading, students]);
+      }
+
+      console.warn(
+        "Folder sync skipped: folder-server.js is not reachable. " +
+          "Start start-folder-server.bat and reload the page."
+      );
+    };
+
+    autoSync();
+  }, [loading, students, fetchStudents]);
 
   // ============================================================
   // REALTIME STUDENT UPDATES
@@ -417,7 +490,12 @@ export default function Students({ onViewStudent }) {
     try {
       const studentId = Number(generatedId);
 
-      // 1. Save student details in Supabase.
+      // College name of the selected department (used for the folder)
+      const collegeName =
+        departments.find((d) => String(d.college_id) === String(form.department))
+          ?.college_name || "";
+
+      // 1. Save student details (with folder path) in Supabase.
       const { error: insertError } = await supabase
         .from("tbl_student")
         .insert({
@@ -434,6 +512,13 @@ export default function Students({ onViewStudent }) {
           program_id: Number(form.course),
           year_level: yearLevelToInt[form.yearLevel] || 1,
           status: form.status,
+          folder_path: buildStudentFolderPath(
+            collegeName,
+            studentId,
+            form.first_name,
+            form.middle_name,
+            form.last_name
+          ),
         });
 
       if (insertError) {
@@ -449,12 +534,13 @@ export default function Students({ onViewStudent }) {
 
       studentSaved = true;
 
-      // 2. Create the student's folder on this Windows computer.
+      // 2. Create the student's folder in C:\StudentRecords\<College>\.
       let folderPath = null;
       let folderError = null;
 
       try {
         folderPath = await createStudentFolder(
+          collegeName,
           studentId,
           form.first_name,
           form.middle_name,
@@ -462,15 +548,20 @@ export default function Students({ onViewStudent }) {
         );
 
         // 3. Save the returned path in tbl_student.
-        const { error: updateError } = await supabase
+        const { data: savedRows, error: updateError } = await supabase
           .from("tbl_student")
           .update({ folder_path: folderPath })
-          .eq("student_id", studentId);
+          .eq("student_id", studentId)
+          .select("folder_path");
 
         if (updateError) {
           folderError = new Error(
             "Folder created, but the folder path could not be saved: " +
               updateError.message
+          );
+        } else if (!savedRows || savedRows.length === 0) {
+          folderError = new Error(
+            "Folder created, but the database blocked saving the path (check the RLS update policy on tbl_student)."
           );
         }
       } catch (error) {
@@ -502,7 +593,8 @@ export default function Students({ onViewStudent }) {
         alert(
           "Student saved successfully, but folder setup needs attention.\n\n" +
             folderError.message +
-            "\n\nStart folder-server.js and verify the configured Windows path."
+            "\n\nStart start-folder-server.bat, then reload this page. " +
+            "The folder will be created automatically."
         );
       }
     } catch (error) {
