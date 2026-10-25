@@ -125,6 +125,15 @@ export default function Login({ onLogin, onStudentAccess }) {
         return;
       }
 
+      // ADDED: admin accounts must use the Admin login, not the staff login
+      if (!expectedRole && data.user_role?.toLowerCase() === "admin") {
+        await supabase.auth.signOut();
+        setError(
+          "Access denied. Admin accounts must log in through the Admin login."
+        );
+        return;
+      }
+
       if (!normalizeRole(data.user_role)) {
         await supabase.auth.signOut(); // ADDED
         setError(
