@@ -8,6 +8,31 @@ use Illuminate\Support\Facades\File;
 
 class StudentController extends Controller
 {
+    /**
+     * Base folder for student folders on THIS computer.
+     * Optional override in .env:  STUDENT_BASE_PATH="D:\SchoolRecords\student"
+     */
+    private function getBasePath(): string
+    {
+        $custom = env('STUDENT_BASE_PATH');
+        if ($custom) {
+            return rtrim($custom, '\\/');
+        }
+
+        // Windows: USERPROFILE, Linux/Mac: HOME
+        $home = getenv('USERPROFILE') ?: getenv('HOME');
+
+        if (!$home) {
+            $home = ($_SERVER['HOMEDRIVE'] ?? '') . ($_SERVER['HOMEPATH'] ?? '');
+        }
+
+        if (!$home) {
+            throw new \RuntimeException('Could not detect the user home folder.');
+        }
+
+        return rtrim($home, '\\/') . DIRECTORY_SEPARATOR . 'Documents' . DIRECTORY_SEPARATOR . 'student';
+    }
+
     public function createStudentFolder($student)
     {
         $studentName = trim(
@@ -15,16 +40,17 @@ class StudentController extends Controller
             ($student->middle_name ?? '') . ' ' .
             $student->last_name
         );
+        $studentName = preg_replace('/\s+/', ' ', $studentName);
 
         // Make the folder name safe for Windows
         $folderName = preg_replace(
             '/[<>:"\/\\\\|?*\x00-\x1F]/',
             '_',
-            $studentName
+            $student->student_id . '_' . str_replace(' ', '_', $studentName)
         );
+        $folderName = rtrim($folderName, '. ');
 
-        $basePath = 'C:\\Users\\USER\\Documents\\student';
-        $folderPath = $basePath . '\\' . $folderName;
+        $folderPath = $this->getBasePath() . DIRECTORY_SEPARATOR . $folderName;
 
         if (!File::isDirectory($folderPath)) {
             File::makeDirectory($folderPath, 0755, true);

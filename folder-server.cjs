@@ -2,11 +2,58 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs/promises");
 const path = require("path");
+const os = require("os");
+const { execFileSync } = require("child_process");
 
 const app = express();
 const PORT = 3001;
 
-const BASE_FOLDER = "C:\\Users\\USER\\Documents\\student";
+// ------------------------------------------------------------
+// Work out the base folder for THIS computer
+// ------------------------------------------------------------
+function expandEnvVars(value) {
+  return value.replace(/%([^%]+)%/g, (match, name) => process.env[name] || match);
+}
+
+// Windows can move "Documents" (e.g. into OneDrive), so ask the registry
+function getWindowsDocumentsFolder() {
+  if (process.platform !== "win32") return null;
+
+  try {
+    const output = execFileSync(
+      "reg",
+      [
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+        "/v",
+        "Personal",
+      ],
+      { encoding: "utf8", windowsHide: true }
+    );
+
+    const match = output.match(/Personal\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
+    if (match) return expandEnvVars(match[1].trim());
+  } catch {
+    // fall through to the default below
+  }
+
+  return null;
+}
+
+function resolveBaseFolder() {
+  // 1. Optional manual override: set STUDENT_BASE_FOLDER on that PC
+  if (process.env.STUDENT_BASE_FOLDER?.trim()) {
+    return path.resolve(expandEnvVars(process.env.STUDENT_BASE_FOLDER.trim()));
+  }
+
+  // 2. The PC's real Documents folder, 3. fallback to <home>/Documents
+  const documents =
+    getWindowsDocumentsFolder() || path.join(os.homedir(), "Documents");
+
+  return path.join(documents, "student");
+}
+
+const BASE_FOLDER = resolveBaseFolder();
 
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "5mb" }));
@@ -51,6 +98,25 @@ async function pathExists(target) {
     return false;
   }
 }
+
+// A folder_path saved in the database may come from another PC
+// (e.g. C:\Users\OTHER\Documents\student\2026000123_Juan).
+// Only the folder NAME matters, so rebuild the path under THIS PC's base folder.
+function localizeSavedPath(savedPath) {
+  if (typeof savedPath !== "string" || !savedPath.trim()) return null;
+
+  const folderName = path.win32.basename(savedPath.trim().replace(/[\\/]+$/, ""));
+  if (!folderName) return null;
+
+  return path.join(BASE_FOLDER, folderName);
+}
+
+// ------------------------------------------------------------
+// Health check (shows which folder this PC is using)
+// ------------------------------------------------------------
+app.get("/health", (req, res) => {
+  res.json({ ok: true, base_folder: BASE_FOLDER });
+});
 
 // ------------------------------------------------------------
 // Create a folder for a NEW student
@@ -122,10 +188,8 @@ app.post("/sync-folders", async (req, res) => {
         buildFolderName(s.student_id, s.first_name, s.middle_name, s.last_name)
       );
 
-      const current =
-        typeof s.folder_path === "string" && s.folder_path.trim()
-          ? path.resolve(s.folder_path.trim())
-          : null;
+      // Saved path mapped onto THIS computer's base folder
+      const current = localizeSavedPath(s.folder_path);
 
       if (current && !isInsideBase(current)) {
         result.skipped.push({
@@ -135,7 +199,7 @@ app.post("/sync-folders", async (req, res) => {
         continue;
       }
 
-      // Already the right folder: just make sure it exists
+      // Already the right folder: just make sure it exists on this PC
       if (current && sameFolder(current, target)) {
         const made = await fs.mkdir(target, { recursive: true });
         if (made) result.created++;
@@ -143,7 +207,7 @@ app.post("/sync-folders", async (req, res) => {
         continue;
       }
 
-      // Old folder (without the ID) exists: rename it
+      // Old folder (without the ID) exists on this PC: rename it
       if (current && (await pathExists(current))) {
         if (await pathExists(target)) {
           result.skipped.push({
@@ -159,7 +223,7 @@ app.post("/sync-folders", async (req, res) => {
         continue;
       }
 
-      // No folder yet (or the saved path is missing): create it
+      // No folder yet (or it is missing on this PC): create it
       const made = await fs.mkdir(target, { recursive: true });
       if (made) result.created++;
       else result.existing++;
@@ -176,6 +240,8 @@ app.post("/sync-folders", async (req, res) => {
   return res.json(result);
 });
 
-app.listen(PORT, "127.0.0.1", () => {
+app.listen(PORT, "127.0.0.1", async () => {
+  await fs.mkdir(BASE_FOLDER, { recursive: true }).catch(() => {});
   console.log(`Student folder server running at http://127.0.0.1:${PORT}`);
+  console.log(`Student folders are stored in: ${BASE_FOLDER}`);
 });
