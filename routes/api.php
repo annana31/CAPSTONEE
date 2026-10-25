@@ -8,7 +8,7 @@ use App\Http\Controllers\Api\ReportsController;
 use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\AuthController; // RBAC
 use App\Http\Controllers\RequestController;
-
+use App\Http\Controllers\StudentController;
 /*
 |--------------------------------------------------------------------------
 | API Routes
@@ -78,3 +78,6 @@ Route::middleware('auth.staff')->group(function () {
 // before an RBAC token even exists yet — so they stay public, same as before RBAC.
 Route::post('staff/{staff}/login',  [StaffController::class, 'setActive']);
 Route::post('staff/{staff}/logout', [StaffController::class, 'setInactive']);
+
+
+Route::post('/students', [StudentController::class, 'store']);

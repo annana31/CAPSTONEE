@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import "./styles/Students.css";
 import { useAuth } from "./AuthContext"; // RBAC
@@ -26,11 +26,63 @@ const yearLevelToInt = {
 
 const ROWS_PER_PAGE = 10;
 
+// Folder helper (folder-server.js) running on this Windows computer
+const FOLDER_SERVER_URL = "http://127.0.0.1:3001/create-folder";
+const FOLDER_SYNC_URL = "http://127.0.0.1:3001/sync-folders";
+
+const buildStudentName = (first, middle, last) =>
+  [first, middle, last]
+    .map((value) => (value || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ");
+
+// Asks the folder helper to create the student's folder and returns its path
+const createStudentFolder = async (studentId, first, middle, last) => {
+  const response = await fetch(FOLDER_SERVER_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      student_id: studentId,
+      first_name: first,
+      middle_name: middle || "",
+      last_name: last,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.message || "Failed to create student folder.");
+  }
+
+  return result.folder_path;
+};
+
+// Makes sure every existing student has a folder named with the student ID.
+// Old folders are renamed, missing ones are created. The response lists the
+// students whose folder_path changed so it can be saved in the database.
+const syncStudentFolders = async (studentList) => {
+  const response = await fetch(FOLDER_SYNC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ students: studentList }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.message || "Folder sync failed.");
+  }
+
+  return result;
+};
+
 const currentYear = new Date().getFullYear();
-const yearOptions = Array.from(
-  { length: 10 },
-  (_, i) => currentYear - i
-);
+const yearOptions = Array.from({ length: 10 }, (_, i) => currentYear - i);
 
 const statusClass = (status) => {
   if (status === "Active") return "status-badge status-active";
@@ -79,6 +131,9 @@ export default function Students({ onViewStudent }) {
   const [submitting, setSubmitting] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Makes sure the folder sync runs only once per page load
+  const folderSyncDone = useRef(false);
 
   // ============================================================
   // FORM
@@ -164,6 +219,7 @@ export default function Students({ onViewStudent }) {
         address,
         year_level,
         status,
+        folder_path,
         tbl_college (college_id, college_name),
         tbl_program (program_id, program_name)
       `)
@@ -186,24 +242,17 @@ export default function Students({ onViewStudent }) {
           contact: s.contact_number ?? "",
           address: s.address ?? "",
 
-          department:
-            s.tbl_college?.college_name ?? "—",
+          folder_path: s.folder_path ?? "",
 
-          college_id:
-            s.tbl_college?.college_id ?? null,
+          department: s.tbl_college?.college_name ?? "—",
+          college_id: s.tbl_college?.college_id ?? null,
 
-          course:
-            s.tbl_program?.program_name ?? "—",
+          course: s.tbl_program?.program_name ?? "—",
+          program_id: s.tbl_program?.program_id ?? null,
 
-          program_id:
-            s.tbl_program?.program_id ?? null,
+          year: intToYearLevel[s.year_level] ?? `Year ${s.year_level}`,
 
-          year:
-            intToYearLevel[s.year_level] ??
-            `Year ${s.year_level}`,
-
-          status:
-            s.status ?? "Active",
+          status: s.status ?? "Active",
         }))
       );
     }
@@ -216,6 +265,53 @@ export default function Students({ onViewStudent }) {
   useEffect(() => {
     fetchStudents();
   }, [fetchStudents]);
+
+  // ============================================================
+  // AUTO-CREATE / RENAME FOLDERS FOR EXISTING STUDENTS
+  // Runs once per page load, after students are loaded.
+  // Folders are named "<student_id>_<Name>". Old folders without the ID
+  // are renamed, missing folders are created, and the new folder_path
+  // is saved in tbl_student.
+  // ============================================================
+  useEffect(() => {
+    if (loading || folderSyncDone.current || students.length === 0) return;
+    folderSyncDone.current = true;
+
+    const studentList = students.map((s) => ({
+      student_id: s.id,
+      first_name: s.first_name,
+      middle_name: s.middle_name,
+      last_name: s.last_name,
+      folder_path: s.folder_path,
+    }));
+
+    syncStudentFolders(studentList)
+      .then(async (r) => {
+        console.log(
+          `Folder sync: ${r.created} created, ${r.renamed} renamed, ${r.existing} already correct`,
+          r.skipped.length || r.failed.length ? r : ""
+        );
+
+        // Save the new folder paths
+        for (const u of r.updates || []) {
+          const { error } = await supabase
+            .from("tbl_student")
+            .update({ folder_path: u.folder_path })
+            .eq("student_id", u.student_id);
+
+          if (error) {
+            console.warn(
+              `Could not save folder path for ${u.student_id}:`,
+              error.message
+            );
+          }
+        }
+      })
+      .catch((err) => {
+        // Fails quietly if folder-server.js is not running
+        console.warn("Folder sync skipped:", err.message);
+      });
+  }, [loading, students]);
 
   // ============================================================
   // REALTIME STUDENT UPDATES
@@ -256,24 +352,11 @@ export default function Students({ onViewStudent }) {
         .includes(term) ||
       String(s.id).includes(term);
 
-    const matchDept = filterDept
-      ? s.college_id === Number(filterDept)
-      : true;
+    const matchDept = filterDept ? s.college_id === Number(filterDept) : true;
+    const matchYear = filterYear ? s.year === filterYear : true;
+    const matchCourse = filterCourse ? s.course === filterCourse : true;
 
-    const matchYear = filterYear
-      ? s.year === filterYear
-      : true;
-
-    const matchCourse = filterCourse
-      ? s.course === filterCourse
-      : true;
-
-    return (
-      matchSearch &&
-      matchDept &&
-      matchYear &&
-      matchCourse
-    );
+    return matchSearch && matchDept && matchYear && matchCourse;
   });
 
   // ============================================================
@@ -281,17 +364,9 @@ export default function Students({ onViewStudent }) {
   // ============================================================
   useEffect(() => {
     setCurrentPage(1);
-  }, [
-    search,
-    filterDept,
-    filterYear,
-    filterCourse,
-  ]);
+  }, [search, filterDept, filterYear, filterCourse]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filtered.length / ROWS_PER_PAGE)
-  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -300,13 +375,8 @@ export default function Students({ onViewStudent }) {
   }, [currentPage, totalPages]);
 
   const paginated = useMemo(() => {
-    const start =
-      (currentPage - 1) * ROWS_PER_PAGE;
-
-    return filtered.slice(
-      start,
-      start + ROWS_PER_PAGE
-    );
+    const start = (currentPage - 1) * ROWS_PER_PAGE;
+    return filtered.slice(start, start + ROWS_PER_PAGE);
   }, [filtered, currentPage]);
 
   // ============================================================
@@ -316,10 +386,7 @@ export default function Students({ onViewStudent }) {
     setForm((prev) => ({
       ...prev,
       [field]: value,
-
-      ...(field === "department"
-        ? { course: "" }
-        : {}),
+      ...(field === "department" ? { course: "" } : {}),
     }));
   };
 
@@ -328,88 +395,124 @@ export default function Students({ onViewStudent }) {
   // ============================================================
   const handleSubmit = async () => {
     if (!can(PERMISSIONS.STUDENTS_CREATE)) {
+      alert("You do not have permission to add students.");
       return;
     }
 
     if (
       !form.idSuffix ||
-      !form.first_name ||
-      !form.last_name ||
+      !form.first_name.trim() ||
+      !form.last_name.trim() ||
       !form.department ||
       !form.course
     ) {
+      alert("Please complete all required student fields.");
       return;
     }
 
     setSubmitting(true);
 
+    let studentSaved = false;
+
     try {
-      const { error } = await supabase
+      const studentId = Number(generatedId);
+
+      // 1. Save student details in Supabase.
+      const { error: insertError } = await supabase
         .from("tbl_student")
         .insert({
-          student_id: Number(generatedId),
-
-          first_name: form.first_name,
-          last_name: form.last_name,
-          middle_name:
-            form.middle_name || null,
-
-          birthdate:
-            form.birthdate || null,
-
-          gender:
-            form.gender || null,
-
-          email:
-            form.email || null,
-
-          contact_number:
-            form.contact || null,
-
-          address:
-            form.address || null,
-
-          college_id:
-            Number(form.department),
-
-          program_id:
-            Number(form.course),
-
-          year_level:
-            yearLevelToInt[
-              form.yearLevel
-            ] || 1,
-
-          status:
-            form.status,
+          student_id: studentId,
+          first_name: form.first_name.trim(),
+          last_name: form.last_name.trim(),
+          middle_name: form.middle_name.trim() || null,
+          birthdate: form.birthdate || null,
+          gender: form.gender || null,
+          email: form.email.trim() || null,
+          contact_number: form.contact.trim() || null,
+          address: form.address.trim() || null,
+          college_id: Number(form.department),
+          program_id: Number(form.course),
+          year_level: yearLevelToInt[form.yearLevel] || 1,
+          status: form.status,
         });
 
-      if (error) {
-        console.error(
-          "Insert error:",
-          error
-        );
-
-        alert(
-          "Failed to save student: " +
-            error.message
-        );
-
+      if (insertError) {
+        if (insertError.code === "23505") {
+          alert(
+            "A student with this ID or the same name (folder) already exists."
+          );
+        } else {
+          alert("Failed to save student: " + insertError.message);
+        }
         return;
       }
 
-      // ADDED: record in Audit Logs
-      logActivity({
-        type: "Update",
-        description: `Added new student ${generatedId} (${form.first_name} ${form.last_name})`,
-        module: "Students Module",
-      });
+      studentSaved = true;
 
+      // 2. Create the student's folder on this Windows computer.
+      let folderPath = null;
+      let folderError = null;
+
+      try {
+        folderPath = await createStudentFolder(
+          studentId,
+          form.first_name,
+          form.middle_name,
+          form.last_name
+        );
+
+        // 3. Save the returned path in tbl_student.
+        const { error: updateError } = await supabase
+          .from("tbl_student")
+          .update({ folder_path: folderPath })
+          .eq("student_id", studentId);
+
+        if (updateError) {
+          folderError = new Error(
+            "Folder created, but the folder path could not be saved: " +
+              updateError.message
+          );
+        }
+      } catch (error) {
+        folderError = error;
+      }
+
+      // 4. Log the student registration.
+      try {
+        await logActivity({
+          type: "Create",
+          description: `Added new student ${studentId} (${buildStudentName(
+            form.first_name,
+            form.middle_name,
+            form.last_name
+          )})`,
+          module: "Students Module",
+        });
+      } catch (error) {
+        console.error("Activity logging failed:", error);
+      }
+
+      // 5. Refresh the table and reset the form.
       await fetchStudents();
 
-      // Reset form
       setForm(emptyForm());
       setShowModal(false);
+
+      if (folderError) {
+        alert(
+          "Student saved successfully, but folder setup needs attention.\n\n" +
+            folderError.message +
+            "\n\nStart folder-server.js and verify the configured Windows path."
+        );
+      }
+    } catch (error) {
+      console.error("Student registration failed:", error);
+
+      alert(
+        studentSaved
+          ? "The student was saved, but an unexpected error occurred. Check the console."
+          : "Failed to add student: " + error.message
+      );
     } finally {
       setSubmitting(false);
     }
@@ -420,38 +523,28 @@ export default function Students({ onViewStudent }) {
   // ============================================================
   return (
     <>
-      {/* ======================================================
-          HEADER
-      ====================================================== */}
+      {/* HEADER */}
       <div className="students-header">
-        <h2 className="students-title">
-          Student Records
-        </h2>
+        <h2 className="students-title">Student Records</h2>
 
         {can(PERMISSIONS.STUDENTS_CREATE) && (
           <button
             className="students-add-btn"
-            onClick={() =>
-              setShowModal(true)
-            }
+            onClick={() => setShowModal(true)}
           >
             Add Student
           </button>
         )}
       </div>
 
-      {/* ======================================================
-          FILTER BAR
-      ====================================================== */}
+      {/* FILTER BAR */}
       <div className="students-filter-bar">
         <input
           type="text"
           placeholder="Search by name or student ID..."
           className="students-search"
           value={search}
-          onChange={(e) =>
-            setSearch(e.target.value)
-          }
+          onChange={(e) => setSearch(e.target.value)}
         />
 
         <select
@@ -462,15 +555,10 @@ export default function Students({ onViewStudent }) {
             setFilterCourse("");
           }}
         >
-          <option value="">
-            All Departments
-          </option>
+          <option value="">All Departments</option>
 
           {departments.map((d) => (
-            <option
-              key={d.college_id}
-              value={d.college_id}
-            >
+            <option key={d.college_id} value={d.college_id}>
               {d.college_name}
             </option>
           ))}
@@ -479,27 +567,15 @@ export default function Students({ onViewStudent }) {
         <select
           className="students-select"
           value={filterCourse}
-          onChange={(e) =>
-            setFilterCourse(e.target.value)
-          }
+          onChange={(e) => setFilterCourse(e.target.value)}
         >
-          <option value="">
-            All Courses
-          </option>
+          <option value="">All Courses</option>
 
-          {(
-            filterDept
-              ? coursesByDept[
-                  Number(filterDept)
-                ] || []
-              : Object.values(
-                  coursesByDept
-                ).flat()
+          {(filterDept
+            ? coursesByDept[Number(filterDept)] || []
+            : Object.values(coursesByDept).flat()
           ).map((c) => (
-            <option
-              key={c.program_id}
-              value={c.program_name}
-            >
+            <option key={c.program_id} value={c.program_name}>
               {c.program_name}
             </option>
           ))}
@@ -508,13 +584,9 @@ export default function Students({ onViewStudent }) {
         <select
           className="students-select"
           value={filterYear}
-          onChange={(e) =>
-            setFilterYear(e.target.value)
-          }
+          onChange={(e) => setFilterYear(e.target.value)}
         >
-          <option value="">
-            All Year Levels
-          </option>
+          <option value="">All Year Levels</option>
 
           {yearLevels.map((y) => (
             <option key={y} value={y}>
@@ -524,59 +596,31 @@ export default function Students({ onViewStudent }) {
         </select>
       </div>
 
-      {/* ======================================================
-          TABLE
-      ====================================================== */}
+      {/* TABLE */}
       <div className="students-table-wrapper">
         <table className="students-table">
           <thead>
             <tr className="students-thead">
-              <th className="students-th-first">
-                Student ID
-              </th>
-
-              <th className="students-th">
-                Full Name
-              </th>
-
-              <th className="students-th">
-                Department
-              </th>
-
-              <th className="students-th">
-                Course
-              </th>
-
-              <th className="students-th">
-                Year Level
-              </th>
-
-              <th className="students-th">
-                Status
-              </th>
-
-              <th className="students-th">
-                Record
-              </th>
+              <th className="students-th-first">Student ID</th>
+              <th className="students-th">Full Name</th>
+              <th className="students-th">Department</th>
+              <th className="students-th">Course</th>
+              <th className="students-th">Year Level</th>
+              <th className="students-th">Status</th>
+              <th className="students-th">Record</th>
             </tr>
           </thead>
 
           <tbody>
             {loading ? (
               <tr>
-                <td
-                  colSpan={7}
-                  className="students-empty"
-                >
+                <td colSpan={7} className="students-empty">
                   Loading students...
                 </td>
               </tr>
             ) : paginated.length === 0 ? (
               <tr>
-                <td
-                  colSpan={7}
-                  className="students-empty"
-                >
+                <td colSpan={7} className="students-empty">
                   No students found.
                 </td>
               </tr>
@@ -585,48 +629,23 @@ export default function Students({ onViewStudent }) {
                 <tr
                   key={s.id}
                   className={
-                    i % 2 === 0
-                      ? "students-row-even"
-                      : "students-row-odd"
+                    i % 2 === 0 ? "students-row-even" : "students-row-odd"
                   }
                 >
-                  <td className="students-td-first">
-                    {s.id}
-                  </td>
-
-                  <td className="students-td-name">
-                    {s.name}
-                  </td>
+                  <td className="students-td-first">{s.id}</td>
+                  <td className="students-td-name">{s.name}</td>
+                  <td className="students-td">{s.department}</td>
+                  <td className="students-td">{s.course}</td>
+                  <td className="students-td">{s.year}</td>
 
                   <td className="students-td">
-                    {s.department}
-                  </td>
-
-                  <td className="students-td">
-                    {s.course}
-                  </td>
-
-                  <td className="students-td">
-                    {s.year}
-                  </td>
-
-                  <td className="students-td">
-                    <span
-                      className={statusClass(
-                        s.status
-                      )}
-                    >
-                      {s.status}
-                    </span>
+                    <span className={statusClass(s.status)}>{s.status}</span>
                   </td>
 
                   <td className="students-td">
                     <button
                       className="students-view-btn"
-                      onClick={() =>
-                        onViewStudent &&
-                        onViewStudent(s.id)
-                      }
+                      onClick={() => onViewStudent && onViewStudent(s.id)}
                     >
                       View
                     </button>
@@ -638,86 +657,41 @@ export default function Students({ onViewStudent }) {
         </table>
       </div>
 
-      {/* ======================================================
-          PAGINATION
-      ====================================================== */}
+      {/* PAGINATION */}
       {!loading && filtered.length > 0 && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent:
-              "space-between",
+            justifyContent: "space-between",
             marginTop: "16px",
             padding: "0 4px",
           }}
         >
-          <span
-            style={{
-              fontSize: "0.85rem",
-              color: "#6b7280",
-            }}
-          >
+          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
             Showing{" "}
-            <strong
-              style={{
-                color: "#111827",
-              }}
-            >
-              {(currentPage - 1) *
-                ROWS_PER_PAGE +
-                1}
-            </strong>
-            {" "}–{" "}
-            <strong
-              style={{
-                color: "#111827",
-              }}
-            >
-              {Math.min(
-                currentPage *
-                  ROWS_PER_PAGE,
-                filtered.length
-              )}
-            </strong>
-            {" "}of{" "}
-            <strong
-              style={{
-                color: "#111827",
-              }}
-            >
-              {filtered.length}
-            </strong>
+            <strong style={{ color: "#111827" }}>
+              {(currentPage - 1) * ROWS_PER_PAGE + 1}
+            </strong>{" "}
+            –{" "}
+            <strong style={{ color: "#111827" }}>
+              {Math.min(currentPage * ROWS_PER_PAGE, filtered.length)}
+            </strong>{" "}
+            of{" "}
+            <strong style={{ color: "#111827" }}>{filtered.length}</strong>
           </span>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <button
-              onClick={() =>
-                setCurrentPage((p) =>
-                  Math.max(1, p - 1)
-                )
-              }
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
               style={{
                 border: "none",
-                background:
-                  "transparent",
+                background: "transparent",
                 fontSize: "0.85rem",
                 fontWeight: 500,
-                color:
-                  currentPage === 1
-                    ? "#c7cad1"
-                    : "#6b7280",
-                cursor:
-                  currentPage === 1
-                    ? "not-allowed"
-                    : "pointer",
+                color: currentPage === 1 ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
                 padding: "6px 10px",
               }}
             >
@@ -730,16 +704,12 @@ export default function Students({ onViewStudent }) {
                 borderRadius: "8px",
                 minWidth: "32px",
                 height: "32px",
-                display:
-                  "inline-flex",
-                alignItems:
-                  "center",
-                justifyContent:
-                  "center",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
                 fontSize: "0.85rem",
                 fontWeight: 600,
-                background:
-                  "#1a1a5e",
+                background: "#1a1a5e",
                 color: "#fff",
               }}
             >
@@ -748,33 +718,16 @@ export default function Students({ onViewStudent }) {
 
             <button
               onClick={() =>
-                setCurrentPage((p) =>
-                  Math.min(
-                    totalPages,
-                    p + 1
-                  )
-                )
+                setCurrentPage((p) => Math.min(totalPages, p + 1))
               }
-              disabled={
-                currentPage ===
-                totalPages
-              }
+              disabled={currentPage === totalPages}
               style={{
                 border: "none",
-                background:
-                  "transparent",
+                background: "transparent",
                 fontSize: "0.85rem",
                 fontWeight: 500,
-                color:
-                  currentPage ===
-                  totalPages
-                    ? "#c7cad1"
-                    : "#6b7280",
-                cursor:
-                  currentPage ===
-                  totalPages
-                    ? "not-allowed"
-                    : "pointer",
+                color: currentPage === totalPages ? "#c7cad1" : "#6b7280",
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
                 padding: "6px 10px",
               }}
             >
@@ -784,50 +737,29 @@ export default function Students({ onViewStudent }) {
         </div>
       )}
 
-      {/* ======================================================
-          ADD STUDENT MODAL
-      ====================================================== */}
+      {/* ADD STUDENT MODAL */}
       {showModal && (
-        <div
-          className="modal-overlay"
-          onClick={() =>
-            setShowModal(false)
-          }
-        >
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div
             className="modal-card"
-            style={{
-              maxWidth: "600px",
-              maxHeight: "90vh",
-              overflowY: "auto",
-            }}
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            style={{ maxWidth: "600px", maxHeight: "90vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent:
-                  "space-between",
+                justifyContent: "space-between",
                 marginBottom: "20px",
               }}
             >
-              <h3
-                className="modal-title"
-                style={{
-                  margin: 0,
-                }}
-              >
+              <h3 className="modal-title" style={{ margin: 0 }}>
                 Add New Student
               </h3>
 
               <button
-                onClick={() =>
-                  setShowModal(false)
-                }
+                onClick={() => setShowModal(false)}
                 style={{
                   background: "none",
                   border: "none",
@@ -841,76 +773,44 @@ export default function Students({ onViewStudent }) {
               </button>
             </div>
 
-            {/* ==================================================
-                STUDENT ID GENERATOR
-            ================================================== */}
+            {/* STUDENT ID GENERATOR */}
             <div
               style={{
-                background:
-                  "rgba(230,168,23,0.08)",
-                border:
-                  "1px solid rgba(230,168,23,0.2)",
+                background: "rgba(230,168,23,0.08)",
+                border: "1px solid rgba(230,168,23,0.2)",
                 borderRadius: "10px",
-                padding:
-                  "14px 16px",
-                marginBottom:
-                  "20px",
+                padding: "14px 16px",
+                marginBottom: "20px",
               }}
             >
               <p
                 className="modal-label"
-                style={{
-                  marginBottom:
-                    "10px",
-                  color: "#e6a817",
-                }}
+                style={{ marginBottom: "10px", color: "#e6a817" }}
               >
                 Student ID Generator
               </p>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems:
-                    "center",
-                  gap: "10px",
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 <select
                   className="modal-select"
-                  style={{
-                    flex: 1,
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.enrollYear
-                  }
+                  style={{ flex: 1, marginBottom: 0 }}
+                  value={form.enrollYear}
                   onChange={(e) =>
-                    handleFormChange(
-                      "enrollYear",
-                      e.target.value
-                    )
+                    handleFormChange("enrollYear", e.target.value)
                   }
                 >
-                  {yearOptions.map(
-                    (y) => (
-                      <option
-                        key={y}
-                        value={String(y)}
-                      >
-                        {y}
-                      </option>
-                    )
-                  )}
+                  {yearOptions.map((y) => (
+                    <option key={y} value={String(y)}>
+                      {y}
+                    </option>
+                  ))}
                 </select>
 
                 <span
                   style={{
                     color: "#9ca3af",
-                    fontWeight:
-                      "bold",
-                    fontSize:
-                      "16px",
+                    fontWeight: "bold",
+                    fontSize: "16px",
                   }}
                 >
                   —
@@ -918,44 +818,28 @@ export default function Students({ onViewStudent }) {
 
                 <input
                   className="modal-input"
-                  style={{
-                    flex: 2,
-                    marginBottom: 0,
-                  }}
+                  style={{ flex: 2, marginBottom: 0 }}
                   placeholder="123456"
                   maxLength={6}
-                  value={
-                    form.idSuffix
-                  }
+                  value={form.idSuffix}
                   onChange={(e) =>
                     handleFormChange(
                       "idSuffix",
-                      e.target.value.replace(
-                        /\D/g,
-                        ""
-                      )
+                      e.target.value.replace(/\D/g, "")
                     )
                   }
                 />
 
                 <div
                   style={{
-                    background:
-                      "rgba(26,26,110,0.08)",
-                    border:
-                      "1px solid rgba(26,26,110,0.2)",
-                    borderRadius:
-                      "8px",
-                    padding:
-                      "10px 14px",
-                    fontSize:
-                      "13px",
-                    fontWeight:
-                      "bold",
-                    color:
-                      "#1a1a6e",
-                    whiteSpace:
-                      "nowrap",
+                    background: "rgba(26,26,110,0.08)",
+                    border: "1px solid rgba(26,26,110,0.2)",
+                    borderRadius: "8px",
+                    padding: "10px 14px",
+                    fontSize: "13px",
+                    fontWeight: "bold",
+                    color: "#1a1a6e",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   {generatedId}
@@ -963,428 +847,236 @@ export default function Students({ onViewStudent }) {
               </div>
             </div>
 
-            {/* ==================================================
-                FIRST NAME & LAST NAME
-            ================================================== */}
+            {/* FIRST NAME & LAST NAME */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "14px",
-                marginBottom:
-                  "14px",
+                marginBottom: "14px",
               }}
             >
               <div>
-                <label className="modal-label">
-                  First Name
-                </label>
-
+                <label className="modal-label">First Name</label>
                 <input
                   className="modal-input"
-                  style={{
-                    marginBottom: 0,
-                  }}
+                  style={{ marginBottom: 0 }}
                   placeholder="First name"
-                  value={
-                    form.first_name
-                  }
+                  value={form.first_name}
                   onChange={(e) =>
-                    handleFormChange(
-                      "first_name",
-                      e.target.value
-                    )
+                    handleFormChange("first_name", e.target.value)
                   }
                 />
               </div>
 
               <div>
-                <label className="modal-label">
-                  Last Name
-                </label>
-
+                <label className="modal-label">Last Name</label>
                 <input
                   className="modal-input"
-                  style={{
-                    marginBottom: 0,
-                  }}
+                  style={{ marginBottom: 0 }}
                   placeholder="Last name"
-                  value={
-                    form.last_name
-                  }
+                  value={form.last_name}
                   onChange={(e) =>
-                    handleFormChange(
-                      "last_name",
-                      e.target.value
-                    )
+                    handleFormChange("last_name", e.target.value)
                   }
                 />
               </div>
             </div>
 
-            {/* ==================================================
-                MIDDLE NAME & BIRTHDATE
-            ================================================== */}
+            {/* MIDDLE NAME & BIRTHDATE */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "14px",
-                marginBottom:
-                  "14px",
+                marginBottom: "14px",
               }}
             >
               <div>
                 <label className="modal-label">
                   Middle Name{" "}
-                  <span
-                    style={{
-                      fontWeight: 400,
-                      color: "#999",
-                    }}
-                  >
+                  <span style={{ fontWeight: 400, color: "#999" }}>
                     (optional)
                   </span>
                 </label>
-
                 <input
                   className="modal-input"
-                  style={{
-                    marginBottom: 0,
-                  }}
+                  style={{ marginBottom: 0 }}
                   placeholder="Middle name"
-                  value={
-                    form.middle_name
-                  }
+                  value={form.middle_name}
                   onChange={(e) =>
-                    handleFormChange(
-                      "middle_name",
-                      e.target.value
-                    )
+                    handleFormChange("middle_name", e.target.value)
                   }
                 />
               </div>
 
               <div>
-                <label className="modal-label">
-                  Birthdate
-                </label>
-
+                <label className="modal-label">Birthdate</label>
                 <input
                   type="date"
                   className="modal-input"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.birthdate
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.birthdate}
                   onChange={(e) =>
-                    handleFormChange(
-                      "birthdate",
-                      e.target.value
-                    )
+                    handleFormChange("birthdate", e.target.value)
                   }
                 />
               </div>
             </div>
 
-            {/* ==================================================
-                GENDER & EMAIL
-            ================================================== */}
+            {/* GENDER & EMAIL */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "14px",
-                marginBottom:
-                  "14px",
+                marginBottom: "14px",
               }}
             >
               <div>
-                <label className="modal-label">
-                  Gender
-                </label>
-
+                <label className="modal-label">Gender</label>
                 <select
                   className="modal-select"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.gender
-                  }
-                  onChange={(e) =>
-                    handleFormChange(
-                      "gender",
-                      e.target.value
-                    )
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.gender}
+                  onChange={(e) => handleFormChange("gender", e.target.value)}
                 >
-                  <option>
-                    Female
-                  </option>
-                  <option>
-                    Male
-                  </option>
-                  <option>
-                    Prefer not to say
-                  </option>
+                  <option>Female</option>
+                  <option>Male</option>
+                  <option>Prefer not to say</option>
                 </select>
               </div>
 
               <div>
-                <label className="modal-label">
-                  Email
-                </label>
-
+                <label className="modal-label">Email</label>
                 <input
                   type="email"
                   className="modal-input"
-                  style={{
-                    marginBottom: 0,
-                  }}
+                  style={{ marginBottom: 0 }}
                   placeholder="Email address"
-                  value={
-                    form.email
-                  }
-                  onChange={(e) =>
-                    handleFormChange(
-                      "email",
-                      e.target.value
-                    )
-                  }
+                  value={form.email}
+                  onChange={(e) => handleFormChange("email", e.target.value)}
                 />
               </div>
             </div>
 
-            {/* ==================================================
-                DEPARTMENT & COURSE
-            ================================================== */}
+            {/* DEPARTMENT & COURSE */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "14px",
-                marginBottom:
-                  "14px",
+                marginBottom: "14px",
               }}
             >
               <div>
-                <label className="modal-label">
-                  Department
-                </label>
-
+                <label className="modal-label">Department</label>
                 <select
                   className="modal-select"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.department
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.department}
                   onChange={(e) =>
-                    handleFormChange(
-                      "department",
-                      e.target.value
-                    )
+                    handleFormChange("department", e.target.value)
                   }
                 >
-                  <option value="">
-                    Select Department
-                  </option>
+                  <option value="">Select Department</option>
 
-                  {departments.map(
-                    (d) => (
-                      <option
-                        key={
-                          d.college_id
-                        }
-                        value={
-                          d.college_id
-                        }
-                      >
-                        {
-                          d.college_name
-                        }
-                      </option>
-                    )
-                  )}
+                  {departments.map((d) => (
+                    <option key={d.college_id} value={d.college_id}>
+                      {d.college_name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div>
-                <label className="modal-label">
-                  Course
-                </label>
-
+                <label className="modal-label">Course</label>
                 <select
                   className="modal-select"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.course
-                  }
-                  onChange={(e) =>
-                    handleFormChange(
-                      "course",
-                      e.target.value
-                    )
-                  }
-                  disabled={
-                    !form.department
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.course}
+                  onChange={(e) => handleFormChange("course", e.target.value)}
+                  disabled={!form.department}
                 >
-                  <option value="">
-                    Select Course
-                  </option>
+                  <option value="">Select Course</option>
 
-                  {(
-                    coursesByDept[
-                      Number(
-                        form.department
-                      )
-                    ] || []
-                  ).map((c) => (
-                    <option
-                      key={
-                        c.program_id
-                      }
-                      value={
-                        c.program_id
-                      }
-                    >
-                      {
-                        c.program_name
-                      }
+                  {(coursesByDept[Number(form.department)] || []).map((c) => (
+                    <option key={c.program_id} value={c.program_id}>
+                      {c.program_name}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {/* ==================================================
-                YEAR LEVEL & STATUS
-            ================================================== */}
+            {/* YEAR LEVEL & STATUS */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "14px",
-                marginBottom:
-                  "20px",
+                marginBottom: "20px",
               }}
             >
               <div>
-                <label className="modal-label">
-                  Year Level
-                </label>
-
+                <label className="modal-label">Year Level</label>
                 <select
                   className="modal-select"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.yearLevel
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.yearLevel}
                   onChange={(e) =>
-                    handleFormChange(
-                      "yearLevel",
-                      e.target.value
-                    )
+                    handleFormChange("yearLevel", e.target.value)
                   }
                 >
-                  {yearLevels.map(
-                    (y) => (
-                      <option
-                        key={y}
-                        value={y}
-                      >
-                        {y}
-                      </option>
-                    )
-                  )}
+                  {yearLevels.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div>
-                <label className="modal-label">
-                  Status
-                </label>
-
+                <label className="modal-label">Status</label>
                 <select
                   className="modal-select"
-                  style={{
-                    marginBottom: 0,
-                  }}
-                  value={
-                    form.status
-                  }
-                  onChange={(e) =>
-                    handleFormChange(
-                      "status",
-                      e.target.value
-                    )
-                  }
+                  style={{ marginBottom: 0 }}
+                  value={form.status}
+                  onChange={(e) => handleFormChange("status", e.target.value)}
                 >
-                  {statuses.map(
-                    (s) => (
-                      <option
-                        key={s}
-                        value={s}
-                      >
-                        {s}
-                      </option>
-                    )
-                  )}
+                  {statuses.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
 
-            {/* ==================================================
-                FOOTER
-            ================================================== */}
+            {/* FOOTER */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "1fr 1fr",
+                gridTemplateColumns: "1fr 1fr",
                 gap: "12px",
               }}
             >
               <button
                 className="modal-submit-btn"
-                onClick={
-                  handleSubmit
-                }
-                disabled={
-                  submitting
-                }
+                onClick={handleSubmit}
+                disabled={submitting}
               >
-                {submitting
-                  ? "Saving..."
-                  : "Save Student"}
+                {submitting ? "Saving..." : "Save Student"}
               </button>
 
               <button
                 className="modal-cancel-btn"
                 style={{
-                  border:
-                    "1px solid #e5e7eb",
-                  borderRadius:
-                    "8px",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "8px",
                   padding: "10px",
                 }}
-                onClick={() =>
-                  setShowModal(false)
-                }
+                onClick={() => setShowModal(false)}
               >
                 Cancel
               </button>
