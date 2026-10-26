@@ -1,5 +1,8 @@
 import os
+import re
+import shutil
 import time
+import unicodedata
 from datetime import datetime
 import requests
 
@@ -30,12 +33,107 @@ SCAN_FOLDER = os.path.join(BASE_DIR, "scans")
 
 os.makedirs(SCAN_FOLDER, exist_ok=True)
 
+# Permanent storage: C:\StudentRecords\<College>\<ID>_<Name>\
+# Optional override: set STUDENT_BASE_FOLDER on a PC
+STUDENT_RECORDS_ROOT = (
+    os.environ.get("STUDENT_BASE_FOLDER", "").strip()
+    or os.path.join(os.environ.get("SystemDrive", "C:") + "\\", "StudentRecords")
+)
+
 
 # Simple in-memory cache so opening the scan modal repeatedly doesn't
-# re-probe every WIA device each time. The frontend's refresh (⟳) button
+# re-probe every WIA device each time. The frontend's refresh button
 # passes ?force=1 to bypass this and get a fresh read.
 _SCANNER_CACHE = {"scanners": None, "timestamp": 0}
 _SCANNER_CACHE_TTL_SECONDS = 20
+
+
+# ============================================================
+# HELPERS: FOLDER NAMES (same rules as folder-server.js)
+# ============================================================
+
+def safe_name(value):
+    """Make a value safe to use as ONE Windows folder/file name part."""
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[. ]+$", "", value)
+    return value[:120]
+
+
+def build_student_folder(student):
+    """
+    C:\\StudentRecords\\<College>\\<ID>_<First_Middle_Last>
+    Returns None if the student information is incomplete.
+    """
+    student_id = safe_name(student.get("student_id"))
+    first = str(student.get("first_name") or "").strip()
+    middle = str(student.get("middle_name") or "").strip()
+    last = str(student.get("last_name") or "").strip()
+
+    if not student_id or not first or not last:
+        return None
+
+    full_name = safe_name(" ".join(p for p in (first, middle, last) if p))
+    student_folder = f"{student_id}_{full_name.replace(' ', '_')}"
+
+    college_folder = safe_name(student.get("college_name")).replace(" ", "_")
+    if not college_folder:
+        college_folder = "Unassigned"
+
+    return os.path.join(STUDENT_RECORDS_ROOT, college_folder, student_folder)
+
+
+def is_inside(base, target):
+    base = os.path.abspath(base).lower()
+    target = os.path.abspath(target).lower()
+    try:
+        return os.path.commonpath([base, target]) == base
+    except ValueError:
+        return False
+
+
+def store_scan_file(filename, document_type, student, move=True):
+    """
+    Put an already-scanned file (in the temporary scans folder) into the
+    student's folder. Returns (saved_path, error_message).
+    """
+    # Only allow plain file names that exist in the temporary scans folder
+    clean_name = os.path.basename(str(filename or ""))
+    source = os.path.join(SCAN_FOLDER, clean_name)
+
+    if not clean_name or not os.path.isfile(source):
+        return None, "The scanned file was not found. Please scan again."
+
+    folder = build_student_folder(student or {})
+    if not folder:
+        return None, "Student ID and name are required to store the document."
+
+    if not is_inside(STUDENT_RECORDS_ROOT, folder):
+        return None, "Invalid student folder."
+
+    os.makedirs(folder, exist_ok=True)
+
+    # File name: <Document_Type>_<timestamp>.jpg (never overwrites)
+    doc_part = safe_name(document_type).replace(" ", "_") or "Unclassified"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    extension = os.path.splitext(clean_name)[1] or ".jpg"
+
+    destination = os.path.join(folder, f"{doc_part}_{stamp}{extension}")
+    counter = 2
+    while os.path.exists(destination):
+        destination = os.path.join(
+            folder, f"{doc_part}_{stamp}_{counter}{extension}"
+        )
+        counter += 1
+
+    if move:
+        shutil.move(source, destination)
+    else:
+        shutil.copy2(source, destination)
+
+    print(f"Stored document: {destination}")
+    return destination, None
 
 
 # ============================================================
@@ -101,7 +199,8 @@ def home():
         "status": "online",
         "service": "RegisScan Scanner Service",
         "platform": "Windows WIA",
-        "scanner_service": True
+        "scanner_service": True,
+        "storage_root": STUDENT_RECORDS_ROOT
     })
 
 
@@ -200,9 +299,14 @@ def scan_document():
 
         data = request.get_json(silent=True) or {}
 
-        # Scanning only needs the scanner; the student is confirmed
-        # afterwards on the OCR confirmation screen.
+        # Scanning only needs the scanner; the student is normally
+        # confirmed afterwards on the OCR confirmation screen.
         device_uid = data.get("device_uid")
+
+        # OPTIONAL: if the student is already known, the scan is filed
+        # into the student's folder immediately after OCR.
+        # {student_id, first_name, middle_name, last_name, college_name}
+        known_student = data.get("student")
 
         print(f"Requested scanner: {device_uid}")
 
@@ -267,7 +371,7 @@ def scan_document():
             }), 500
 
         # ----------------------------------------------------
-        # Save scanned image
+        # Save scanned image (temporary copy in the scans folder)
         # ----------------------------------------------------
 
         image.save(
@@ -279,11 +383,6 @@ def scan_document():
         print("Scan successful!")
         print(f"Saved: {filepath}")
 
-        # ----------------------------------------------------
-        # URL React can use to display the image
-        # ----------------------------------------------------
-
-        
         # ----------------------------------------------------
         # Build the scanned image URL
         # ----------------------------------------------------
@@ -347,6 +446,21 @@ def scan_document():
             print("PADDLEOCR CONNECTION ERROR:", ocr_error)
 
         # ----------------------------------------------------
+        # If the student is already known, file the document now
+        # ----------------------------------------------------
+
+        stored_path = None
+        store_error = None
+
+        if isinstance(known_student, dict):
+            stored_path, store_error = store_scan_file(
+                filename,
+                ocr_result.get("document_type", ""),
+                known_student,
+                move=False  # keep the temp file so the preview still works
+            )
+
+        # ----------------------------------------------------
         # Return scan information AND OCR results to React
         # ----------------------------------------------------
 
@@ -358,6 +472,10 @@ def scan_document():
             "scanner": {
                 "id": device_uid
             },
+
+            # Permanent storage (only when a student was supplied)
+            "stored_path": stored_path,
+            "store_error": store_error,
 
             # OCR status
             "ocr_success": ocr_error is None,
@@ -405,7 +523,59 @@ def scan_document():
 
 
 # ============================================================
-# SERVE SCANNED FILES
+# STORE A SCAN IN THE STUDENT'S FOLDER
+# Call this after the staff confirms the student on the OCR screen.
+#
+# POST /store-scan
+# {
+#   "filename": "scan_20261026_153012_123456.jpg",
+#   "document_type": "Birth Certificate",      (confirmed/edited by staff)
+#   "student": {
+#     "student_id": 2026302405,
+#     "first_name": "Arielle",
+#     "middle_name": "Vermoy",
+#     "last_name": "Dades",
+#     "college_name": "CEA"
+#   },
+#   "keep_temp": false                         (optional)
+# }
+# ============================================================
+
+@app.route("/store-scan", methods=["POST"])
+def store_scan():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        saved_path, error = store_scan_file(
+            data.get("filename"),
+            data.get("document_type"),
+            data.get("student"),
+            move=not bool(data.get("keep_temp", False))
+        )
+
+        if error:
+            return jsonify({"success": False, "message": error}), 400
+
+        return jsonify({
+            "success": True,
+            "message": "Document stored successfully.",
+            "stored_path": saved_path
+        }), 200
+
+    except Exception as e:
+        print("\nSTORE SCAN ERROR")
+        print("Type:", type(e).__name__)
+        print("Message:", str(e))
+
+        return jsonify({
+            "success": False,
+            "message": f"Could not store the document: {e}",
+            "error_type": type(e).__name__
+        }), 500
+
+
+# ============================================================
+# SERVE SCANNED FILES (temporary preview copies)
 # ============================================================
 
 @app.route("/scans/<filename>", methods=["GET"])
@@ -439,8 +609,12 @@ if __name__ == "__main__":
     print("POST /scan")
 
     print()
-    print("Scanned files:")
-    print("http://127.0.0.1:5000/scans/<filename>")
+    print("Store a scan in the student's folder:")
+    print("POST /store-scan")
+
+    print()
+    print("Documents are stored in:")
+    print(f"{STUDENT_RECORDS_ROOT}\\<College>\\<ID>_<Name>\\")
 
     print()
     print("=" * 60)
