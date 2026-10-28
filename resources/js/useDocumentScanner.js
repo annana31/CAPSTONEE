@@ -7,10 +7,18 @@ import { matchStudentFromOcr } from "./matchStudent";
  * Reusable document-scanning logic.
  *
  * @param {object}   options
- * @param {function} options.onScanned  
- *                                      
- * @param {function} options.onConfirmed 
- *                                       
+ * @param {string}   options.studentId   When set (scanning from a student's
+ *                                       profile) the student is already known,
+ *                                       so OCR name matching is skipped.
+ * @param {function} options.onScanned   (credential, result) => void
+ *                                       Called right after a successful scan.
+ * @param {function} options.onConfirmed async (payload, credential) => boolean
+ *                                       Called when the OCR confirmation is
+ *                                       saved. Return false (or throw) to keep
+ *                                       the confirmation dialog open.
+ * @param {function} options.onCancelled (credential) => void
+ *                                       Called when the confirmation dialog is
+ *                                       cancelled (undo any "pending" state).
  */
 
 // If OCR gave a label but no document_id, find the row in tbl_documents.
@@ -31,8 +39,10 @@ async function resolveDocumentId(result) {
 }
 
 export default function useDocumentScanner({
+  studentId,
   onScanned,
   onConfirmed,
+  onCancelled,
 } = {}) {
   const [showScanModal, setShowScanModal] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState(null);
@@ -165,51 +175,54 @@ export default function useDocumentScanner({
         throw new Error(data?.message || "Failed to scan the document.");
       }
 
-      console.log("[RAW SCAN RESPONSE]", data);   // shows what the scanner service forwards
+      console.log("[RAW SCAN RESPONSE]", data); // what the scanner service forwards
 
-const fileUrl = absoluteUrl(data.file_url);
+      const fileUrl = absoluteUrl(data.file_url);
 
-const result = {
-  ...data,
-  file_url: fileUrl,
+      const result = {
+        ...data,
+        file_url: fileUrl,
 
-  document_type:
-    data.document_type || data.detected_document_type || data.detectedDocType || "",
-  document_type_key: data.document_type_key || data.documentTypeKey || "",
-  document_type_confidence:
-    data.document_type_confidence ?? data.documentTypeConfidence ?? null,
-  document_type_matches:
-    data.document_type_matches || data.documentTypeMatches || [],
-  document_type_suggestions: data.document_type_suggestions || [],
+        document_type:
+          data.document_type ||
+          data.detected_document_type ||
+          data.detectedDocType ||
+          "",
+        document_type_key: data.document_type_key || data.documentTypeKey || "",
+        document_type_confidence:
+          data.document_type_confidence ?? data.documentTypeConfidence ?? null,
+        document_type_matches:
+          data.document_type_matches || data.documentTypeMatches || [],
+        document_type_suggestions: data.document_type_suggestions || [],
 
-  document_id: data.document_id ?? data.documentId ?? null,
+        document_id: data.document_id ?? data.documentId ?? null,
 
-  first_name: data.first_name ?? data.firstName ?? "",
-  middle_name: data.middle_name ?? data.middleName ?? "",
-  last_name: data.last_name ?? data.lastName ?? "",
-};
-
+        first_name: data.first_name ?? data.firstName ?? "",
+        middle_name: data.middle_name ?? data.middleName ?? "",
+        last_name: data.last_name ?? data.lastName ?? "",
+      };
 
       // Auto-fill: document type ID + student ID
       try {
         result.document_id = await resolveDocumentId(result);
 
-        // Send all available name information to the matcher.
         // The OCR may return the name in Last-First-Middle order.
         const fullName =
           result.full_name ||
           result.fullName ||
           result.student_name ||
           result.studentName ||
-          [
-            result.first_name,
-            result.middle_name,
-            result.last_name,
-          ]
+          [result.first_name, result.middle_name, result.last_name]
             .filter(Boolean)
             .join(" ");
 
-        if (fullName.trim()) {
+        if (studentId) {
+          // Scanning from a student's profile: the student is already known,
+          // so there is nothing to match.
+          result.matched_student = null;
+          result.student_candidates = [];
+          result.matched_student_id = studentId;
+        } else if (fullName.trim()) {
           const match = await matchStudentFromOcr({
             first: result.first_name,
             middle: result.middle_name,
@@ -221,8 +234,7 @@ const result = {
           result.student_candidates = match.candidates || [];
 
           // Keep the actual database student ID available to the UI.
-          result.matched_student_id =
-            match.student?.student_id ?? null;
+          result.matched_student_id = match.student?.student_id ?? null;
 
           console.log("[OCR NAME]", fullName);
           console.log("[STUDENT MATCH]", match.student);
@@ -232,19 +244,16 @@ const result = {
           result.student_candidates = [];
           result.matched_student_id = null;
 
-          console.warn(
-            "OCR returned no usable name for student matching."
-          );
+          console.warn("OCR returned no usable name for student matching.");
         }
       } catch (e) {
         console.error("Auto-fill lookup failed:", e);
         result.matched_student = null;
         result.student_candidates = [];
-        result.matched_student_id = null;
+        result.matched_student_id = studentId || null;
       }
 
-
-onScanned?.(credential, result);
+      onScanned?.(credential, result);
 
       setOcrResult(result);
       setShowScanModal(false);
@@ -271,6 +280,9 @@ onScanned?.(credential, result);
   const scanAgain = () => {
     const credential = selectedCredential;
 
+    // The first scan was discarded: let the page undo its "pending" state.
+    onCancelled?.(credential);
+
     setOcrResult(null);
     setShowOCRConfirmation(false);
 
@@ -289,17 +301,27 @@ onScanned?.(credential, result);
   // ============================================================
 
   const cancelOCR = () => {
+    const credential = selectedCredential;
+
     setShowOCRConfirmation(false);
     setOcrResult(null);
+    setSelectedCredential(null);
+
+    onCancelled?.(credential);
   };
 
   const saveOCR = async (payload) => {
     try {
-      await onConfirmed?.(payload, selectedCredential);
+      const ok = await onConfirmed?.(payload, selectedCredential);
+
+      // onConfirmed returns false when saving failed: keep the dialog open
+      // so the registrar can retry.
+      if (ok === false) return false;
 
       setShowOCRConfirmation(false);
       setOcrResult(null);
       setSelectedCredential(null);
+      return true;
     } catch (err) {
       console.error("OCR save error:", err);
       throw err;

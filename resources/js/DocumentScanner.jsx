@@ -4,7 +4,7 @@ import OCRConfirmation from "./OCRconfirmation.jsx";
  * Renders the Scan Document modal and the OCR confirmation dialog.
  * Drive it with the useDocumentScanner hook:
  *
- *   const scanner = useDocumentScanner({ studentId, onScanned, onConfirmed });
+ *   const scanner = useDocumentScanner({ studentId, onScanned, onConfirmed, onCancelled });
  *   <DocumentScanner scanner={scanner} studentId={id} studentName={name} />
  */
 export default function DocumentScanner({ scanner, studentId, studentName }) {
@@ -23,6 +23,7 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
     showOCRConfirmation,
     close,
     scan,
+    scanAgain,
     cancelOCR,
     saveOCR,
   } = scanner;
@@ -51,7 +52,9 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
                 <h3 className="scan-modal-title">Scan Document</h3>
 
                 <p className="scan-modal-sub">
-                  Select a scanner and scan the student's document.
+                  {studentName
+                    ? `Select a scanner and scan a document for ${studentName}.`
+                    : "Select a scanner and scan the student's document."}
                 </p>
 
                 {/* DOCUMENT TYPE */}
@@ -312,23 +315,21 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
           OCR CONFIRMATION
           ======================================================== */}
 
-      
-{showOCRConfirmation && ocrResult && (
-  <OCRConfirmation
-    ocrResult={ocrResult}
-    studentId={studentId ?? ""}
-    studentName={studentName ?? ""}
-    fileName={ocrResult.filename || ""}
-    fileUrl={ocrResult.file_url || ""}
-    detectedDocType={ocrResult.document_type || ""}
-    documentTypeConfidence={
-      ocrResult.document_type_confidence ?? null
-    }
-    onCancel={cancelOCR}
-    onSave={saveOCR}
-  />
-)}
-
+      {showOCRConfirmation && ocrResult && (
+        <OCRConfirmation
+          ocrResult={ocrResult}
+          studentId={studentId ?? ""}
+          studentName={studentName ?? ""}
+          fileName={ocrResult.filename || ""}
+          fileUrl={ocrResult.file_url || ""}
+          detectedDocType={ocrResult.document_type || ""}
+          documentTypeConfidence={ocrResult.document_type_confidence ?? null}
+          preferredDocType={selectedCredential?.name || ""}
+          onCancel={cancelOCR}
+          onScanAgain={scanAgain}
+          onSave={saveOCR}
+        />
+      )}
     </>
   );
 }

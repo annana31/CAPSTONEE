@@ -7,7 +7,7 @@ const { execFileSync } = require("child_process");
 
 const app = express();
 const PORT = 3001;
-const VERSION = "5";
+const VERSION = "6";
 
 // ------------------------------------------------------------
 // Base folder: C:\StudentRecords (same path on every PC)
@@ -96,7 +96,8 @@ app.use((req, res, next) => {
 });
 
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: "5mb" }));
+// Large limit: scanned files are sent as base64
+app.use(express.json({ limit: "50mb" }));
 
 // ------------------------------------------------------------
 // Helpers
@@ -133,6 +134,16 @@ function buildTarget(collegeName, studentId, first, middle, last) {
     BASE_FOLDER,
     buildCollegeFolder(collegeName),
     buildFolderName(studentId, first, middle, last)
+  );
+}
+
+// "Birth Certificate" -> "birth_certificate"
+function docSlug(name) {
+  return (
+    String(name || "other")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "other"
   );
 }
 
@@ -242,7 +253,7 @@ app.get("/health", (req, res) => {
     ok: true,
     version: VERSION,
     base_folder: BASE_FOLDER,
-    layout: "<base>\\<College>\\<ID>_<Name>",
+    layout: "<base>\\<College>\\<ID>_<Name>\\<document_type>",
     legacy_folders: LEGACY_ROOTS,
   });
 });
@@ -281,6 +292,64 @@ app.post("/create-folder", async (req, res) => {
     console.error("Folder creation error:", error);
     return res.status(500).json({
       message: `Could not create the student folder: ${error.code || error.message}`,
+    });
+  }
+});
+
+// ------------------------------------------------------------
+// Save a scanned document into the student's folder:
+// BASE\<College>\<ID>_<Name>\<document_type>\<timestamp>_<file>
+// ------------------------------------------------------------
+app.post("/save-document", async (req, res) => {
+  try {
+    const {
+      student_id,
+      first_name,
+      middle_name = "",
+      last_name,
+      college_name = "",
+      document_name = "other",
+      file_name = "document",
+      data_base64,
+    } = req.body;
+
+    if (
+      student_id == null ||
+      !first_name?.trim() ||
+      !last_name?.trim() ||
+      !data_base64
+    ) {
+      return res.status(400).json({
+        message: "Student, name and file data are required.",
+      });
+    }
+
+    // The folder is always built here from the student's data, never from
+    // a path sent by the browser.
+    const studentDir = buildTarget(
+      college_name,
+      student_id,
+      first_name,
+      middle_name,
+      last_name
+    );
+    const dir = path.join(studentDir, docSlug(document_name));
+    await fs.mkdir(dir, { recursive: true });
+
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const cleanName =
+      safeName(String(file_name).replace(/^.*[\\/]/, "")).replace(/ /g, "_") ||
+      "document";
+    const fullPath = path.join(dir, `${stamp}_${cleanName}`);
+
+    await fs.writeFile(fullPath, Buffer.from(data_base64, "base64"));
+    console.log(`  + saved document: ${fullPath}`);
+
+    return res.json({ file_path: fullPath });
+  } catch (error) {
+    console.error("Save document error:", error);
+    return res.status(500).json({
+      message: `Could not save the document: ${error.code || error.message}`,
     });
   }
 });
@@ -387,7 +456,7 @@ const server = app.listen(PORT, "127.0.0.1", async () => {
   }
 
   console.log(`Student folder server v${VERSION} running at http://127.0.0.1:${PORT}`);
-  console.log(`Layout: ${BASE_FOLDER}\\<College>\\<ID>_<Name>`);
+  console.log(`Layout: ${BASE_FOLDER}\\<College>\\<ID>_<Name>\\<document_type>`);
   if (LEGACY_ROOTS.length) {
     console.log(`Old folders will be moved from: ${LEGACY_ROOTS.join(", ")}`);
   }

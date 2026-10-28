@@ -10,6 +10,9 @@ import "./styles/Dashboard.css";
 
 const BUCKET = "student-documents";
 
+// Local folder server (creates C:\StudentRecords\...)
+const FOLDER_SERVER = "http://127.0.0.1:3001";
+
 const statuses = ["Active", "LOA", "Inactive", "Graduated"];
 
 const yearLevels = [
@@ -68,8 +71,9 @@ const safeFileName = (name) =>
     .replace(/^.*[\\/]/, "")
     .replace(/[^A-Za-z0-9._-]/g, "_");
 
-// Every student has their own folder, e.g. students/20233001
-const studentFolder = (s) => s.folder_path || `students/${s.student_id}`;
+// Supabase storage folder. Must be a valid storage key, NOT the Windows
+// path saved in folder_path (C:\StudentRecords\...).
+const storageFolder = (s) => `students/${s.student_id}`;
 
 // "Birth Certificate" -> "birth_certificate" (subfolder per document type)
 const docSlug = (name) =>
@@ -119,6 +123,38 @@ const credStatusClass = (status) => {
 const verifiedCount = (creds) =>
   creds.filter((c) => isVerified(c.status)).length;
 
+// ------------------------------------------------------------
+// File helpers
+// ------------------------------------------------------------
+
+// Reads the scanned file from wherever the scanner left it:
+// an http/blob/data URL, or a path inside the Supabase bucket.
+const readSourceBlob = async (sourceUrl) => {
+  if (!sourceUrl) throw new Error("The scanned file could not be found.");
+
+  if (/^(https?:|blob:|data:)/i.test(sourceUrl)) {
+    const res = await fetch(sourceUrl);
+    if (!res.ok) {
+      throw new Error(`Could not read the scanned file (${res.status}).`);
+    }
+    return res.blob();
+  }
+
+  const { data, error: dlError } = await supabase.storage
+    .from(BUCKET)
+    .download(sourceUrl);
+  if (dlError) throw dlError;
+  return data;
+};
+
+const blobToBase64 = (blob) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.readAsDataURL(blob);
+  });
+
 export default function StudentProfile({ studentId, onBack }) {
   const [student, setStudent] = useState(initialStudent);
   const [colleges, setColleges] = useState([]);
@@ -149,24 +185,11 @@ export default function StudentProfile({ studentId, onBack }) {
   // DOCUMENT STORAGE (one folder per student)
   // ============================================================
 
-  // Copies the scanned file into the student's own folder, inside a
-  // subfolder named after the document type, and returns the stored path:
-  // students/<id>/birth_certificate/<time>_<name>
+  // Uploads to Supabase: students/<id>/<doc_type>/<time>_<name>
+  // This is the copy that Preview reads.
   const uploadToStudentFolder = async ({ sourceUrl, fileName, documentName }) => {
-    const folder = `${studentFolder(student)}/${docSlug(documentName)}`;
-
-    // Already inside the student's folder: nothing to upload.
-    if (sourceUrl && sourceUrl.startsWith(folder + "/")) return sourceUrl;
-
-    if (!sourceUrl) {
-      throw new Error("The scanned file could not be found.");
-    }
-
-    const res = await fetch(sourceUrl);
-    if (!res.ok) {
-      throw new Error(`Could not read the scanned file (${res.status}).`);
-    }
-    const blob = await res.blob();
+    const folder = `${storageFolder(student)}/${docSlug(documentName)}`;
+    const blob = await readSourceBlob(sourceUrl);
 
     let name = safeFileName(fileName);
     if (!/\.[A-Za-z0-9]{2,5}$/.test(name) && EXT_BY_TYPE[blob.type]) {
@@ -184,7 +207,35 @@ export default function StudentProfile({ studentId, onBack }) {
       });
 
     if (uploadError) throw uploadError;
-    return path;
+    return { path, blob, name };
+  };
+
+  // Copies the same file into
+  // C:\StudentRecords\<College>\<ID>_<Name>\<doc_type>\ through the
+  // local folder server.
+  const copyToLocalFolder = async ({ blob, name, documentName }) => {
+    const college =
+      colleges.find((c) => Number(c.college_id) === Number(student.college_id))
+        ?.college_name || "";
+
+    const res = await fetch(`${FOLDER_SERVER}/save-document`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        student_id: student.student_id,
+        first_name: student.first_name,
+        middle_name: student.middle_name || "",
+        last_name: student.last_name,
+        college_name: college,
+        document_name: documentName,
+        file_name: name,
+        data_base64: await blobToBase64(blob),
+      }),
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
+    return body.file_path;
   };
 
   // Loads the student's saved documents and merges them into the
@@ -241,7 +292,7 @@ export default function StudentProfile({ studentId, onBack }) {
   const scanner = useDocumentScanner({
     studentId: student.student_id,
 
-    // Called right after a successful scan
+    // Called right after a successful scan: show the row as "Pending"
     onScanned: (credential, result) => {
       if (!credential) return;
 
@@ -260,7 +311,18 @@ export default function StudentProfile({ studentId, onBack }) {
       );
     },
 
-    // Called when the OCR confirmation is saved
+    // Called when the OCR confirmation is cancelled or "Scan Again" is used:
+    // reload from the database so the "Pending" row goes back to what is
+    // really saved.
+    onCancelled: () => {
+      if (!student.student_id) return;
+      loadDocuments(student.student_id).catch((err) =>
+        console.warn("Could not refresh documents:", err)
+      );
+    },
+
+    // Called when the OCR confirmation is saved.
+    // Returns true when saved, false when it failed (dialog stays open).
     onConfirmed: async (
       { documentId, documentType, fileName, fileUrl },
       selectedCredential
@@ -306,15 +368,15 @@ export default function StudentProfile({ studentId, onBack }) {
           selectedCredential?.name ||
           "other";
 
-        // 1) store the scanned file in the student's folder, inside the
-        //    subfolder of its document type
-        uploadedPath = await uploadToStudentFolder({
+        // 1) store the scanned file in Supabase (this is what Preview reads)
+        const uploaded = await uploadToStudentFolder({
           sourceUrl: fileUrl,
           fileName,
           documentName: typeName,
         });
+        uploadedPath = uploaded.path;
 
-        // 2) save the record pointing at that folder path
+        // 2) save the record pointing at that path
         const { error: insertError } = await supabase
           .from("tbl_student_documents")
           .insert({
@@ -335,11 +397,28 @@ export default function StudentProfile({ studentId, onBack }) {
           module: "Documents Module",
         });
 
+        // 3) copy into the student's folder on this PC (best effort)
+        let localMessage = "";
+        try {
+          const localPath = await copyToLocalFolder({
+            blob: uploaded.blob,
+            name: uploaded.name,
+            documentName: typeName,
+          });
+          localMessage = `\nFolder copy: ${localPath}`;
+        } catch (localErr) {
+          console.warn("Local folder copy failed:", localErr);
+          localMessage =
+            "\nThe copy to the student's folder on this PC was skipped " +
+            "(is the folder server running?).";
+        }
+
         // reload from the database so the document appears in its own
-        // row (e.g. Birth Certificate) with the saved folder path
+        // row with the Preview button
         await loadDocuments(sid);
 
-        alert(`Saved in ${studentFolder(student)}/${docSlug(typeName)}/`);
+        alert(`Saved ${typeName}.${localMessage}`);
+        return true;
       } catch (err) {
         console.error("Save scanned document failed:", err);
 
@@ -349,6 +428,7 @@ export default function StudentProfile({ studentId, onBack }) {
         }
 
         alert(err.message || "Failed to save the scanned document.");
+        return false; // keep the confirmation dialog open to retry
       }
     },
   });
@@ -743,7 +823,10 @@ export default function StudentProfile({ studentId, onBack }) {
               ["Year Level", yearName],
               ["College", collegeName],
               ["Program", programName],
-              ["Document Folder", studentFolder(student)],
+              [
+                "Document Folder",
+                student.folder_path || storageFolder(student),
+              ],
             ].map(([label, value]) => (
               <div key={label}>
                 <p className="profile-info-label">{label}</p>
@@ -801,16 +884,23 @@ export default function StudentProfile({ studentId, onBack }) {
                   </td>
 
                   <td className="credentials-td">
-                    {cred.file ? (
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      {cred.file && (
+                        <button
+                          className="cred-preview-btn"
+                          onClick={() => handlePreview(cred)}
+                        >
+                          Preview
+                        </button>
+                      )}
+
                       <button
                         className="cred-preview-btn"
-                        onClick={() => handlePreview(cred)}
+                        onClick={() => scanner.open(cred)}
                       >
-                        Preview
+                        {cred.file ? "Rescan" : "Scan"}
                       </button>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
