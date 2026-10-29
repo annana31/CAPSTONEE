@@ -548,23 +548,11 @@ if (!staffId) {
                           }
                         >
                           <td className="activity-td-staff">{student.id}</td>
-                          <td className="activity-td-name">
-                            <button
-                              type="button"
-                              onClick={() => onViewStudent && onViewStudent(student.id)}
-                              style={{
-                                background: "none",
-                                border: "none",
-                                padding: 0,
-                                font: "inherit",
-                                color: "inherit",
-                                cursor: "pointer",
-                                textDecoration: "underline",
-                                textAlign: "left",
-                              }}
-                            >
-                              {student.name}
-                            </button>
+                          <td
+                            className="activity-td-name activity-td-name-link"
+                            onClick={() => onViewStudent && onViewStudent(student.id)}
+                          >
+                            {student.name}
                           </td>
                           <td className="activity-td-action">
                             {student.department}

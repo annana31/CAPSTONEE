@@ -438,7 +438,10 @@ export default function Departments({ onViewStudent }) {
                     className={i % 2 === 0 ? "dept-row-even" : "dept-row-odd"}
                   >
                     <td className="dept-td-first">{s.student_id}</td>
-                    <td className="dept-td-name">
+                    <td
+                      className="dept-td-name dept-td-name-link"
+                      onClick={() => onViewStudent?.(s.student_id)}
+                    >
                       {s.first_name} {s.last_name}
                     </td>
                     <td className="dept-td">{s.course}</td>
