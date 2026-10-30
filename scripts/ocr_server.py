@@ -98,6 +98,7 @@ def _build_ocr_engine():
     for kwargs in attempts:
         try:
             print("[OCR] Initializing PaddleOCR...")
+            kwargs["enable_mkldnn"] = False
             engine = PaddleOCR(**kwargs)
 
             print("[OCR] PaddleOCR initialized successfully.")
@@ -384,23 +385,7 @@ def prepare_image(image):
     return image
 
 
-# ============================================================
-# OCR RESULT PARSING
-# ============================================================
 
-def safe_get(obj, key, default=None):
-    try:
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-
-    except Exception:
-        pass
-
-    try:
-        return getattr(obj, key)
-
-    except Exception:
-        return default
 
 
 # ============================================================
@@ -879,7 +864,6 @@ def find_owner_anchor(items):
 
     for item in items:
         text = item.get("text", "")
-
         box = item.get("box")
 
         if not text or box is None:
@@ -889,22 +873,31 @@ def find_owner_anchor(items):
             candidates.append(item)
 
     if not candidates:
+        print("[OWNER ANCHOR] No child-name section anchor found.")
         return None
 
-    # Prefer highest OCR confidence.
+    # Prefer the highest-confidence anchor.
     candidates.sort(
         key=lambda item: float(item.get("score", 0)),
         reverse=True
     )
 
-    return candidates[0]
+    selected = candidates[0]
+
+    print(
+        f"[OWNER ANCHOR] Selected: '{selected['text']}' "
+        f"box={selected['box']} "
+        f"score={selected.get('score', 0):.3f}"
+    )
+
+    return selected
 
 
 # ============================================================
 # OWNER LABEL SELECTION
 # ============================================================
 
-def select_owner_labels(items):
+def select_owner_labels(items, owner_anchor=None):
     """
     Select FIRST / MIDDLE / LAST labels belonging to the
     SAME NAME section.
@@ -1108,6 +1101,37 @@ def select_owner_labels(items):
             "MIDDLE": None,
             "LAST": None,
         }
+
+    # ------------------------------------------------------------
+    # FILTER LABELS USING THE CHILD-NAME SECTION ANCHOR
+    # ------------------------------------------------------------
+
+    if owner_anchor and owner_anchor.get("box"):
+        anchor_box = owner_anchor["box"]
+        anchor_bottom = anchor_box[3]
+
+        anchor_filtered_labels = []
+
+        for label in labels:
+            label_center_y = box_center(label["box"])[1]
+
+            # Only consider name-field labels at or below
+            # the child-name section heading.
+            if label_center_y >= anchor_bottom - 10:
+                anchor_filtered_labels.append(label)
+
+        if anchor_filtered_labels:
+            labels = anchor_filtered_labels
+
+            print(
+                f"[OWNER LABELS] Using child-name anchor. "
+                f"Remaining labels: {len(labels)}"
+            )
+        else:
+            print(
+                "[OWNER LABELS] No labels below child-name anchor. "
+                "Using all detected labels as fallback."
+            )
 
     # ------------------------------------------------------------
     # 2. Print all detected labels
@@ -1329,20 +1353,30 @@ def select_owner_labels(items):
             }
         )
 
+    
     # ------------------------------------------------------------
-    # 7. If complete rows exist, select the TOPMOST complete row.
-    #
-    # On the birth certificate the topmost complete NAME row is
-    # the child's name (mother and father sections are below it).
+    # 7. If complete rows exist, select the closest complete row
+    #    below the child-name section anchor.
     # ------------------------------------------------------------
 
     if complete_rows:
-        complete_rows.sort(key=lambda x: x["row"]["y"])
+        if owner_anchor and owner_anchor.get("box"):
+            anchor_bottom = owner_anchor["box"][3]
+
+            complete_rows.sort(
+                key=lambda x: max(
+                    0,
+                    x["row"]["y"] - anchor_bottom
+                )
+            )
+        else:
+            complete_rows.sort(
+                key=lambda x: x["row"]["y"]
+            )
 
         selected = complete_rows[0]
 
         print("\n[OWNER NAME SECTION]")
-
         print(f"Complete name rows found: {len(complete_rows)}")
 
         for candidate in complete_rows:
@@ -1354,7 +1388,6 @@ def select_owner_labels(items):
             )
 
         print("\n[SELECTED OWNER NAME LABEL GROUP]")
-
         print(f"Row {selected['index']} y={selected['row']['y']:.1f}")
 
         for key in ("FIRST", "MIDDLE", "LAST"):
@@ -1374,6 +1407,70 @@ def select_owner_labels(items):
     # ------------------------------------------------------------
     # 8. Fallback
     #
+    # If no complete row exists, select the row containing the
+    # largest number of recognized name labels.
+    # ------------------------------------------------------------
+
+    print("\n[OWNER LABELS] No complete FIRST/MIDDLE/LAST row found.")
+
+    usable_rows = [
+        row
+        for row in rows
+        if len(row["labels"]) >= 2
+    ]
+
+    if usable_rows:
+        if owner_anchor and owner_anchor.get("box"):
+            anchor_bottom = owner_anchor["box"][3]
+
+            usable_rows.sort(
+                key=lambda row: (
+                    -len(row["labels"]),
+                    max(0, row["y"] - anchor_bottom)
+                )
+            )
+        else:
+            usable_rows.sort(
+                key=lambda row: (
+                    -len(row["labels"]),
+                    row["y"]
+                )
+            )
+
+        selected_row = usable_rows[0]
+
+        result = {
+            "FIRST": None,
+            "MIDDLE": None,
+            "LAST": None,
+        }
+
+        for label in selected_row["labels"]:
+            label_type = label.get("type")
+
+            if label_type in result:
+                result[label_type] = label
+
+        print(
+            f"[OWNER LABELS] Fallback row "
+            f"y={selected_row['y']:.1f} "
+            f"labels={list(result.keys())}"
+        )
+
+        return result
+
+    print("[OWNER LABELS] No usable fallback row found.")
+
+    return {
+        "FIRST": None,
+        "MIDDLE": None,
+        "LAST": None,
+    }
+
+
+    # ------------------------------------------------------------
+    # 8. Fallback
+    #
     # If the document does not produce a complete row, prefer a
     # row containing the largest number of recognized name labels
     # (uppermost on ties) rather than mixing different sections.
@@ -1388,13 +1485,22 @@ def select_owner_labels(items):
             if len(row["labels"]) >= 2
         ]
 
-        if usable_rows:
-            usable_rows.sort(
+    if owner_anchor and owner_anchor.get("box"):
+        anchor_bottom = owner_anchor["box"][3]
+
+        usable_rows.sort(
                 key=lambda row: (
                     -len(row["labels"]),
-                    row["y"]
+                    max(0, row["y"] - anchor_bottom)
                 )
             )
+    else:
+            usable_rows.sort(
+                    key=lambda row: (
+                        -len(row["labels"]),
+                        row["y"]
+                    )
+                )
 
             selected_row = usable_rows[0]
 
@@ -1429,6 +1535,7 @@ def select_owner_labels(items):
 # VALUE EXTRACTION
 # ============================================================
 
+
 def find_value_items(
     items,
     label,
@@ -1441,87 +1548,83 @@ def find_value_items(
         return []
 
     lx1, ly1, lx2, ly2 = label_box
-
     label_h = max(1.0, box_height(label_box))
-
     label_cx, label_cy = box_center(label_box)
 
     candidates = []
 
+    is_middle = label is selected_other_labels.get("MIDDLE")
+
     for item in items:
         box = item.get("box")
-
-        text = item.get("text", "")
+        text = clean_text(item.get("text", ""))
 
         if box is None or not text:
             continue
 
-        # Never use another recognized label as value.
-        if classify_label(text):
+        # Never use another name label or form label as a name.
+        if classify_label(text) or is_non_name_field_text(text):
             continue
-
-        
-        # Never use another recognized label as value.
-        if classify_label(text):
-            continue
-
-        # Never use document field labels as a person's name.
-        if is_non_name_field_text(text):
-            continue
-
-        # ----------------------------------------------------
-        # Value must be BELOW the selected label.
-        # ----------------------------------------------------
-
-
-        
-
-        # ----------------------------------------------------
-        # Value must be BELOW the selected label.
-        # ----------------------------------------------------
 
         cx, cy = box_center(box)
 
+        # The value must be below its own field label.
         if cy <= ly2:
             continue
 
         distance_y = cy - ly2
 
-        # The value of FIRST/MIDDLE/LAST is normally directly below
-        # its field label, so keep the candidate window tight.
-        max_vertical_distance = max(70.0, label_h * 4.5)
+        # Keep the middle-name search area especially tight.
+                # Keep the middle-name search area very strict.
+        # A middle-name value must be close to its own label.
+        if is_middle:
+            max_vertical_distance = max(18.0, label_h * 1.0)
+        else:
+            max_vertical_distance = max(48.0, label_h * 3.2)
 
         if distance_y > max_vertical_distance:
             continue
 
-        # ----------------------------------------------------
-        # Candidate must overlap the label's horizontal area.
-        # ----------------------------------------------------
-
+        # The candidate must be horizontally close to its label.
         overlap = horizontal_overlap(box, label_box)
+        candidate_width = max(1.0, box_width(box))
 
-        candidate_width = box_width(box)
-
-        if overlap <= 0 and candidate_width > 0:
-            # Allow nearby text, but not text from far away.
-            if cx < (lx1 - candidate_width):
+        if is_middle:
+            # Middle-name text must be horizontally aligned
+            # with the MIDDLE label itself.
+            if overlap <= 0:
                 continue
 
-            if cx > (lx2 + candidate_width):
+            overlap_ratio = overlap / candidate_width
+
+            if overlap_ratio < 0.30:
                 continue
 
-        # ----------------------------------------------------
-        # Avoid candidates sitting directly inside another
-        # selected field's region.
-        # ----------------------------------------------------
+            # Reject text whose center is far outside the
+            # horizontal area of the MIDDLE label.
+            allowed_horizontal_margin = max(
+                10.0,
+                box_width(label_box) * 0.15
+            )
 
+            if (
+                cx < lx1 - allowed_horizontal_margin
+                or cx > lx2 + allowed_horizontal_margin
+            ):
+                continue
+
+        else:
+            if overlap <= 0:
+                if cx < lx1 - candidate_width * 0.35:
+                    continue
+
+                if cx > lx2 + candidate_width * 0.35:
+                    continue
+        # Do not allow another field to claim this candidate.
         belongs_to_other = False
 
         for other_field, other_label in selected_other_labels.items():
-            if other_label is label:
-                continue
-
-            if other_label is None:
+            if other_label is None or other_label is label:
                 continue
 
             other_box = other_label.get("box")
@@ -1529,12 +1632,9 @@ def find_value_items(
             if other_box is None:
                 continue
 
-            other_cx, other_cy = box_center(other_box)
+            other_cx, _ = box_center(other_box)
 
-            # If candidate is much closer horizontally to
-            # another field label, don't steal it.
             current_distance = abs(cx - label_cx)
-
             other_distance = abs(cx - other_cx)
 
             if other_distance < current_distance * 0.55:
@@ -1544,15 +1644,9 @@ def find_value_items(
         if belongs_to_other:
             continue
 
-        # ------------------------------------------------------------
-        # Geometry score: text immediately below the field label is
-        # preferred, so unrelated text such as "SEX" cannot win.
-        # ------------------------------------------------------------
-
         horizontal_distance = abs(cx - label_cx)
 
         vertical_score = 1.0 / (1.0 + distance_y)
-
         horizontal_score = 1.0 / (1.0 + horizontal_distance)
 
         geometry_score = (
@@ -1560,16 +1654,15 @@ def find_value_items(
             + horizontal_score * 0.35
         )
 
-        candidates.append(
-            {
-                **item,
-                "distance_y": distance_y,
-                "distance_x": horizontal_distance,
-                "geometry_score": geometry_score,
-            }
-        )
+        candidates.append({
+            **item,
+            "distance_y": distance_y,
+            "distance_x": horizontal_distance,
+            "geometry_score": geometry_score,
+        })
 
     return candidates
+
 
 
 def choose_one_value_line(candidates):
@@ -1794,6 +1887,85 @@ def choose_one_value_line(candidates):
     return " ".join(parts).strip()
 
 
+
+def is_valid_middle_name_value(value):
+    text = clean_name(value)
+
+    if not text:
+        return False
+
+    if is_non_name_field_text(text):
+        return False
+
+    # Middle names should contain letters only.
+    # Reject numbers and mixed form-field content.
+    if any(char.isdigit() for char in text):
+        return False
+
+    words = text.split()
+
+    if not words or len(words) > 4:
+        return False
+
+    # Reject single-character OCR fragments.
+    if any(len(word) < 2 for word in words):
+        return False
+
+    if not all(
+        re.fullmatch(
+            r"[A-Za-zÀ-ÖØ-öø-ÿ'-]+",
+            word
+        )
+        for word in words
+    ):
+        return False
+
+    normalized = re.sub(
+        r"[^a-z]",
+        "",
+        text.lower()
+    )
+
+    forbidden = {
+        "date",
+        "dateofbirth",
+        "placeofbirth",
+        "birth",
+        "sex",
+        "male",
+        "female",
+        "month",
+        "year",
+        "day",
+        "first",
+        "firstname",
+        "middle",
+        "middlename",
+        "last",
+        "lastname",
+        "surname",
+        "mother",
+        "father",
+        "mothersname",
+        "fathersname",
+        "informant",
+        "signature",
+        "occupation",
+        "citizenship",
+        "religion",
+        "residence",
+        "province",
+        "hospital",
+        "clinic",
+        "institution",
+    }
+
+    if normalized in forbidden:
+        return False
+
+    return True
+
+
 # ============================================================
 # OWNER NAME EXTRACTION
 # ============================================================
@@ -1802,8 +1974,14 @@ def choose_one_value_line(candidates):
 def extract_owner_name(image, items):
     image_height, image_width = image.shape[:2]
 
-    selected = select_owner_labels(items)
+        # Detect the child-name section first so label selection
+    # can use it as a reference.
     owner_anchor = find_owner_anchor(items)
+
+    selected = select_owner_labels(
+        items,
+        owner_anchor=owner_anchor
+    )
 
     print("")
     print("================================================")
@@ -1869,6 +2047,10 @@ def extract_owner_name(image, items):
 
             if not text_value:
                 continue
+
+            if field == "MIDDLE":
+                if not is_valid_middle_name_value(text_value):
+                    continue
 
             # Reject form labels, dates, and unrelated fields.
             if is_non_name_field_text(text_value):
@@ -1966,7 +2148,23 @@ def extract_owner_name(image, items):
 
         # Fallback is initialized for EVERY field. It cannot
         # cause an UnboundLocalError when no candidate exists.
-        if not selected_value:
+                # --------------------------------------------------------
+        # FALLBACK
+        #
+        # FIRST and LAST may use the existing line-based fallback.
+        # MIDDLE must NOT use this fallback because it can select
+        # unrelated text from another field.
+        # --------------------------------------------------------
+
+        if not selected_value and field == "MIDDLE":
+            print(
+                "[MIDDLE] No confidently identified middle name. "
+                "Keeping the value blank."
+            )
+
+            selected_value = ""
+
+        elif not selected_value:
             fallback_value = choose_one_value_line(candidates)
             fallback_value = clean_name(fallback_value)
 
@@ -1977,8 +2175,6 @@ def extract_owner_name(image, items):
                 )
                 fallback_value = ""
 
-            # Do not accept digits or obvious form labels
-            # through the fallback path either.
             if fallback_value:
                 fallback_normalized = re.sub(
                     r"[^a-z]",
@@ -2012,12 +2208,18 @@ def extract_owner_name(image, items):
                     "nameinprint",
                 }
 
-                has_digits = any(ch.isdigit() for ch in fallback_value)
+                has_digits = any(
+                    ch.isdigit()
+                    for ch in fallback_value
+                )
 
                 if (
                     fallback_normalized in fallback_forbidden
                     or has_digits
-                    or sum(ch.isalpha() for ch in fallback_value) < 2
+                    or sum(
+                        ch.isalpha()
+                        for ch in fallback_value
+                    ) < 2
                 ):
                     print(
                         f"[{field}] FALLBACK REJECTED: "
@@ -2066,19 +2268,35 @@ COMMA_NAME_RE = re.compile(
 )
 
 
+
 def _split_full_name(full):
     full = clean_name(full)
+
     if not full:
         return "", "", ""
-    m = COMMA_NAME_RE.match(full)
-    if m:  # LAST, FIRST MIDDLE
-        return m.group(2).strip(), m.group(3).strip(" ."), m.group(1).strip()
+
+    match = COMMA_NAME_RE.match(full)
+
+    if match:
+        first_name = match.group(2).strip()
+        last_name = match.group(1).strip()
+
+        # Do not assume that unstructured text contains
+        # a verified middle name.
+        return first_name, "", last_name
+
     parts = full.split()
+
     if len(parts) == 1:
         return parts[0], "", ""
+
     if len(parts) == 2:
         return parts[0], "", parts[1]
-    return " ".join(parts[:-2]), parts[-2], parts[-1]
+
+    # Without separate FIRST / MIDDLE / LAST labels,
+    # do not guess which word is the middle name.
+    return " ".join(parts[:-1]), "", parts[-1]
+
 
 
 def extract_name_generic(items):
@@ -2173,6 +2391,56 @@ def extract_document(image_path):
             owner_name["middle_name"] = owner_name["middle_name"] or m
             owner_name["last_name"] = owner_name["last_name"] or l
             name_source = "generic_label"
+    
+    # ----------------------------------------------------
+    # ENHANCED OCR FALLBACK
+    # Run only if the original OCR did not identify
+    # both the first name and last name.
+    # ----------------------------------------------------
+
+    enhanced_ocr_seconds = 0.0
+
+    if not (owner_name["first_name"] and owner_name["last_name"]):
+        print("\n[ENHANCED OCR] Running enhanced image pass...")
+
+        enhanced_start = time.time()
+
+        enhanced_image = enhance_image_for_ocr(image)
+
+        if enhanced_image is not None:
+            enhanced_items = run_ocr(enhanced_image)
+
+            if enhanced_items:
+                items = merge_ocr_items(items, enhanced_items)
+
+                owner_name = extract_owner_name(image, items)
+                name_source = "enhanced_owner_labels"
+
+                if not (
+                    owner_name["first_name"]
+                    and owner_name["last_name"]
+                ):
+                    f, m, l = extract_name_generic(items)
+
+                    if f and l:
+                        owner_name["first_name"] = (
+                            owner_name["first_name"] or f
+                        )
+                        owner_name["last_name"] = (
+                            owner_name["last_name"] or l
+                        )
+
+                        # Do not populate middle name through
+                        # generic full-name inference.
+                        name_source = "enhanced_generic_label"
+
+        enhanced_ocr_seconds = time.time() - enhanced_start
+
+        print(
+            f"[ENHANCED OCR] Completed in "
+            f"{enhanced_ocr_seconds:.3f} seconds."
+        )
+
 
     # Slow fallback only when the full-page result did not find both names.
     if not (owner_name["first_name"] and owner_name["last_name"]):
@@ -2236,6 +2504,7 @@ def extract_document(image_path):
         "ocr_items": len(ordered_items),
         "timing": {
             "full_ocr_seconds": round(ocr_seconds, 3),
+            "enhanced_ocr_seconds": round(enhanced_ocr_seconds, 3),
             "upper_ocr_seconds": round(upper_ocr_seconds, 3),
             "name_extraction_seconds": round(name_seconds, 3),
             "total_seconds": round(total_seconds, 3),

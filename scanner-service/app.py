@@ -1,9 +1,13 @@
+import base64
+import io
 import os
+import re
 import time
+import unicodedata
 from datetime import datetime
 import requests
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 import pythoncom
@@ -13,6 +17,8 @@ import wia_scan
 # ============================================================
 # REGISSCAN SCANNER SERVICE
 # Windows WIA + wia_scan
+# Documents are saved ONLY into the student's folder:
+#   C:\StudentRecords\<College>\<ID>_<Name>\
 # ============================================================
 
 app = Flask(__name__)
@@ -20,22 +26,117 @@ app = Flask(__name__)
 # Allow your React application to communicate with Flask
 CORS(app)
 
+# Scans (base64 images) can be a few MB
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCAN_FOLDER = os.path.join(BASE_DIR, "scans")
-
-os.makedirs(SCAN_FOLDER, exist_ok=True)
-
+# Optional override: set STUDENT_BASE_FOLDER on a PC
+STUDENT_RECORDS_ROOT = (
+    os.environ.get("STUDENT_BASE_FOLDER", "").strip()
+    or os.path.join(os.environ.get("SystemDrive", "C:") + "\\", "StudentRecords")
+)
 
 # Simple in-memory cache so opening the scan modal repeatedly doesn't
-# re-probe every WIA device each time. The frontend's refresh (⟳) button
+# re-probe every WIA device each time. The frontend's refresh button
 # passes ?force=1 to bypass this and get a fresh read.
 _SCANNER_CACHE = {"scanners": None, "timestamp": 0}
 _SCANNER_CACHE_TTL_SECONDS = 20
+
+
+# ============================================================
+# HELPERS: FOLDER NAMES (same rules as folder-server.js)
+# ============================================================
+
+def safe_name(value):
+    """Make a value safe to use as ONE Windows folder/file name part."""
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[. ]+$", "", value)
+    return value[:120]
+
+
+def build_student_folder(student):
+    """
+    C:\\StudentRecords\\<College>\\<ID>_<First_Middle_Last>
+    Returns None if the student information is incomplete.
+    """
+    student_id = safe_name(student.get("student_id"))
+    first = str(student.get("first_name") or "").strip()
+    middle = str(student.get("middle_name") or "").strip()
+    last = str(student.get("last_name") or "").strip()
+
+    if not student_id or not first or not last:
+        return None
+
+    full_name = safe_name(" ".join(p for p in (first, middle, last) if p))
+    student_folder = f"{student_id}_{full_name.replace(' ', '_')}"
+
+    college_folder = safe_name(student.get("college_name")).replace(" ", "_")
+    if not college_folder:
+        college_folder = "Unassigned"
+
+    return os.path.join(STUDENT_RECORDS_ROOT, college_folder, student_folder)
+
+
+def is_inside(base, target):
+    base = os.path.abspath(base).lower()
+    target = os.path.abspath(target).lower()
+    try:
+        return os.path.commonpath([base, target]) == base
+    except ValueError:
+        return False
+
+
+def save_to_student_folder(image_bytes, document_type, student):
+    """
+    Write the scanned image directly into the student's folder.
+    Returns (saved_path, error_message).
+    """
+    if not image_bytes:
+        return None, "There is no scanned image to store."
+
+    folder = build_student_folder(student or {})
+    if not folder:
+        return None, "Student ID and name are required to store the document."
+
+    if not is_inside(STUDENT_RECORDS_ROOT, folder):
+        return None, "Invalid student folder."
+
+    os.makedirs(folder, exist_ok=True)
+
+    # File name: <Document_Type>_<timestamp>.jpg (never overwrites)
+    doc_part = safe_name(document_type).replace(" ", "_") or "Unclassified"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    destination = os.path.join(folder, f"{doc_part}_{stamp}.jpg")
+    counter = 2
+    while os.path.exists(destination):
+        destination = os.path.join(folder, f"{doc_part}_{stamp}_{counter}.jpg")
+        counter += 1
+
+    with open(destination, "wb") as f:
+        f.write(image_bytes)
+
+    print(f"Stored document: {destination}")
+    return destination, None
+
+
+def decode_image_data(value):
+    """Accepts raw base64 or a 'data:image/jpeg;base64,...' string."""
+    if not value:
+        return None
+    value = str(value)
+    if "," in value and value.lstrip().lower().startswith("data:"):
+        value = value.split(",", 1)[1]
+    try:
+        return base64.b64decode(value, validate=False)
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -45,10 +146,7 @@ _SCANNER_CACHE_TTL_SECONDS = 20
 def discover_scanners():
     """
     Enumerates every WIA device currently registered with Windows and
-    returns its id, name, description and manufacturer. Reading each
-    property directly (by name) is much faster than looping through the
-    full Properties collection for every device, since each property read
-    can involve a round trip to the driver.
+    returns its id, name, description and manufacturer.
     """
 
     device_manager = wia_scan.get_device_manager()
@@ -101,7 +199,8 @@ def home():
         "status": "online",
         "service": "RegisScan Scanner Service",
         "platform": "Windows WIA",
-        "scanner_service": True
+        "scanner_service": True,
+        "storage_root": STUDENT_RECORDS_ROOT
     })
 
 
@@ -115,10 +214,6 @@ def get_scanners():
     force = request.args.get("force") in ("1", "true", "True")
     now = time.time()
 
-    # --------------------------------------------------------
-    # SERVE FROM CACHE WHEN FRESH
-    # --------------------------------------------------------
-
     if (
         not force
         and _SCANNER_CACHE["scanners"] is not None
@@ -130,13 +225,7 @@ def get_scanners():
             "cached": True
         })
 
-    # --------------------------------------------------------
-    # DISCOVER SCANNERS
-    # --------------------------------------------------------
-
-    # Flask's dev server can hand this request to a fresh thread, and COM
-    # objects (which win32com/wia_scan use under the hood) must be
-    # initialized on every thread that touches them before first use.
+    # COM must be initialized on every thread that touches it
     pythoncom.CoInitialize()
 
     try:
@@ -145,17 +234,15 @@ def get_scanners():
         print("=" * 60)
 
         start = time.time()
-
         scanners = discover_scanners()
-
         elapsed = time.time() - start
+
         print(f"Found {len(scanners)} scanner(s) in {elapsed:.2f} seconds.")
 
         for scanner in scanners:
             print(f" - {scanner['name']}")
             print(f"   ID: {scanner['id']}")
 
-        # Update cache
         _SCANNER_CACHE["scanners"] = scanners
         _SCANNER_CACHE["timestamp"] = time.time()
 
@@ -182,6 +269,8 @@ def get_scanners():
 
 # ============================================================
 # SCAN DOCUMENT
+# Nothing is written to disk here unless "student" is supplied,
+# and then it is written ONLY into that student's folder.
 # ============================================================
 
 @app.route("/scan", methods=["POST"])
@@ -194,15 +283,13 @@ def scan_document():
         print("REGISSCAN - SCAN REQUEST")
         print("=" * 60)
 
-        # ----------------------------------------------------
-        # Read the scanner chosen by the staff on the frontend
-        # ----------------------------------------------------
-
         data = request.get_json(silent=True) or {}
 
-        # Scanning only needs the scanner; the student is confirmed
-        # afterwards on the OCR confirmation screen.
         device_uid = data.get("device_uid")
+
+        # OPTIONAL: {student_id, first_name, middle_name, last_name, college_name}
+        # If given, the document is filed into the student's folder right away.
+        known_student = data.get("student")
 
         print(f"Requested scanner: {device_uid}")
 
@@ -214,7 +301,6 @@ def scan_document():
 
         # ----------------------------------------------------
         # Connect directly to the chosen scanner
-        # (no OS device-picker prompt)
         # ----------------------------------------------------
 
         print("Connecting to selected scanner...")
@@ -244,15 +330,7 @@ def scan_document():
         print("Scanner connected successfully.")
 
         # ----------------------------------------------------
-        # Generate filename
-        # ----------------------------------------------------
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"scan_{timestamp}.jpg"
-        filepath = os.path.join(SCAN_FOLDER, filename)
-
-        # ----------------------------------------------------
-        # Start scanning
+        # Scan (image stays in memory)
         # ----------------------------------------------------
 
         print("Starting scan...")
@@ -266,53 +344,36 @@ def scan_document():
                 "message": "The scanner did not return an image."
             }), 500
 
-        # ----------------------------------------------------
-        # Save scanned image
-        # ----------------------------------------------------
+        if image.mode != "RGB":
+            image = image.convert("RGB")
 
-        image.save(
-            filepath,
-            format="JPEG",
-            quality=90
-        )
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=90)
+        image_bytes = buffer.getvalue()
 
-        print("Scan successful!")
-        print(f"Saved: {filepath}")
+        print(f"Scan successful! ({len(image_bytes) // 1024} KB, in memory)")
 
         # ----------------------------------------------------
-        # URL React can use to display the image
+        # Send the scanned image to PaddleOCR (from memory)
         # ----------------------------------------------------
 
-        
-        # ----------------------------------------------------
-        # Build the scanned image URL
-        # ----------------------------------------------------
-
-        file_url = f"{request.host_url.rstrip('/')}/scans/{filename}"
-
-        # ----------------------------------------------------
-        # Send the ACTUAL SCANNED FILE to PaddleOCR
-        # ----------------------------------------------------
-
-        print("Sending scanned file to PaddleOCR...")
-        print(f"OCR file: {filepath}")
+        print("Sending scanned image to PaddleOCR...")
 
         ocr_result = {}
         ocr_error = None
 
         try:
-            with open(filepath, "rb") as scanned_file:
-                ocr_response = requests.post(
-                    "http://127.0.0.1:5001/ocr",
-                    files={
-                        "file": (
-                            filename,
-                            scanned_file,
-                            "image/jpeg"
-                        )
-                    },
-                    timeout=600
-                )
+            ocr_response = requests.post(
+                "http://127.0.0.1:5001/ocr",
+                files={
+                    "file": (
+                        "scan.jpg",
+                        io.BytesIO(image_bytes),
+                        "image/jpeg"
+                    )
+                },
+                timeout=600
+            )
 
             try:
                 ocr_result = ocr_response.json()
@@ -347,17 +408,43 @@ def scan_document():
             print("PADDLEOCR CONNECTION ERROR:", ocr_error)
 
         # ----------------------------------------------------
-        # Return scan information AND OCR results to React
+        # Student known -> save straight into the student's folder
         # ----------------------------------------------------
+
+        stored_path = None
+        store_error = None
+
+        if isinstance(known_student, dict):
+            stored_path, store_error = save_to_student_folder(
+                image_bytes,
+                ocr_result.get("document_type", ""),
+                known_student
+            )
+
+        # ----------------------------------------------------
+        # Return scan + OCR results to React
+        # The image is returned in memory for the preview and for
+        # /store-scan; it is NOT saved anywhere else.
+        # ----------------------------------------------------
+
+        image_data_url = (
+            "data:image/jpeg;base64,"
+            + base64.b64encode(image_bytes).decode("ascii")
+        )
 
         response_data = {
             "success": True,
             "message": "Document scanned successfully.",
-            "filename": filename,
-            "file_url": file_url,
             "scanner": {
                 "id": device_uid
             },
+
+            # Preview + data for /store-scan (nothing is on disk yet)
+            "image_data_url": image_data_url,
+
+            # Only set when a student was supplied
+            "stored_path": stored_path,
+            "store_error": store_error,
 
             # OCR status
             "ocr_success": ocr_error is None,
@@ -387,7 +474,6 @@ def scan_document():
 
         return jsonify(response_data), 200
 
-
     except Exception as e:
         print("\nSCAN ERROR")
         print("=" * 60)
@@ -405,15 +491,55 @@ def scan_document():
 
 
 # ============================================================
-# SERVE SCANNED FILES
+# STORE A SCAN IN THE STUDENT'S FOLDER
+# Call this after the staff confirms the student.
+#
+# POST /store-scan
+# {
+#   "image_data_url": "data:image/jpeg;base64,...",   (from /scan)
+#   "document_type": "Birth Certificate",             (confirmed by staff)
+#   "student": {
+#     "student_id": 2026302405,
+#     "first_name": "Arielle",
+#     "middle_name": "Vermoy",
+#     "last_name": "Dades",
+#     "college_name": "CEA"
+#   }
+# }
 # ============================================================
 
-@app.route("/scans/<filename>", methods=["GET"])
-def get_scan(filename):
-    return send_from_directory(
-        SCAN_FOLDER,
-        filename
-    )
+@app.route("/store-scan", methods=["POST"])
+def store_scan():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        image_bytes = decode_image_data(data.get("image_data_url"))
+
+        saved_path, error = save_to_student_folder(
+            image_bytes,
+            data.get("document_type"),
+            data.get("student")
+        )
+
+        if error:
+            return jsonify({"success": False, "message": error}), 400
+
+        return jsonify({
+            "success": True,
+            "message": "Document stored successfully.",
+            "stored_path": saved_path
+        }), 200
+
+    except Exception as e:
+        print("\nSTORE SCAN ERROR")
+        print("Type:", type(e).__name__)
+        print("Message:", str(e))
+
+        return jsonify({
+            "success": False,
+            "message": f"Could not store the document: {e}",
+            "error_type": type(e).__name__
+        }), 500
 
 
 # ============================================================
@@ -439,8 +565,12 @@ if __name__ == "__main__":
     print("POST /scan")
 
     print()
-    print("Scanned files:")
-    print("http://127.0.0.1:5000/scans/<filename>")
+    print("Store a scan in the student's folder:")
+    print("POST /store-scan")
+
+    print()
+    print("Documents are stored ONLY in:")
+    print(f"{STUDENT_RECORDS_ROOT}\\<College>\\<ID>_<Name>\\")
 
     print()
     print("=" * 60)

@@ -4,7 +4,7 @@ import OCRConfirmation from "./OCRconfirmation.jsx";
  * Renders the Scan Document modal and the OCR confirmation dialog.
  * Drive it with the useDocumentScanner hook:
  *
- *   const scanner = useDocumentScanner({ studentId, onScanned, onConfirmed });
+ *   const scanner = useDocumentScanner({ studentId, onScanned, onConfirmed, onCancelled });
  *   <DocumentScanner scanner={scanner} studentId={id} studentName={name} />
  */
 export default function DocumentScanner({ scanner, studentId, studentName }) {
@@ -13,6 +13,10 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
     selectedCredential,
     scanning,
     scanError,
+
+    // Upload state
+    uploading,
+    uploadError,
     scanners,
     selectedScanner,
     setSelectedScanner,
@@ -23,6 +27,7 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
     showOCRConfirmation,
     close,
     scan,
+    scanAgain,
     cancelOCR,
     saveOCR,
   } = scanner;
@@ -31,10 +36,131 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
     <>
       {/* Spinner animation */}
       <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes uploadFadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes uploadPulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+`}</style>
+
+{/* ========================================================
+    UPLOAD DOCUMENT LOADING OVERLAY
+    ======================================================== */}
+
+{uploading && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 99999,
+      background: "rgba(15, 23, 42, 0.65)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "20px",
+      animation: "uploadFadeIn 0.2s ease",
+    }}
+  >
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "400px",
+        background: "#ffffff",
+        borderRadius: "16px",
+        padding: "35px 25px",
+        textAlign: "center",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+      }}
+    >
+      <div
+        style={{
+          width: "55px",
+          height: "55px",
+          border: "5px solid #e5e7eb",
+          borderTop: "5px solid #000B58",
+          borderRadius: "50%",
+          margin: "0 auto 22px",
+          animation: "spin 1s linear infinite",
+        }}
+      />
+
+      <h3
+        style={{
+          fontSize: "19px",
+          fontWeight: "700",
+          color: "#111827",
+          marginBottom: "9px",
+        }}
+      >
+        Processing Document
+      </h3>
+
+      <p
+        style={{
+          fontSize: "13px",
+          lineHeight: "1.6",
+          color: "#6b7280",
+          margin: 0,
+        }}
+      >
+        Please wait while the system extracts and analyzes
+        the information from your uploaded document.
+      </p>
+
+      <p
+        style={{
+          marginTop: "18px",
+          fontSize: "11px",
+          color: "#000B58",
+          fontWeight: "600",
+          animation: "uploadPulse 1.5s infinite",
+        }}
+      >
+        DO NOT CLOSE THIS WINDOW
+      </p>
+    </div>
+  </div>
+)}
+
+{/* UPLOAD ERROR MESSAGE */}
+
+{uploadError && !uploading && (
+  <div
+    style={{
+      position: "fixed",
+      bottom: "25px",
+      right: "25px",
+      zIndex: 100000,
+      maxWidth: "400px",
+      padding: "15px 20px",
+      borderRadius: "10px",
+      background: "#fee2e2",
+      color: "#b91c1c",
+      border: "1px solid #fecaca",
+      boxShadow: "0 5px 20px rgba(0,0,0,0.12)",
+      fontSize: "13px",
+    }}
+  >
+    <strong>Upload Failed</strong>
+    <p style={{ margin: "5px 0 0" }}>{uploadError}</p>
+  </div>
+)}
 
       {/* ========================================================
           SCAN DOCUMENT MODAL
@@ -51,7 +177,9 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
                 <h3 className="scan-modal-title">Scan Document</h3>
 
                 <p className="scan-modal-sub">
-                  Select a scanner and scan the student's document.
+                  {studentName
+                    ? `Select a scanner and scan a document for ${studentName}.`
+                    : "Select a scanner and scan the student's document."}
                 </p>
 
                 {/* DOCUMENT TYPE */}
@@ -312,23 +440,26 @@ export default function DocumentScanner({ scanner, studentId, studentName }) {
           OCR CONFIRMATION
           ======================================================== */}
 
-      
-{showOCRConfirmation && ocrResult && (
-  <OCRConfirmation
-    ocrResult={ocrResult}
-    studentId={studentId ?? ""}
-    studentName={studentName ?? ""}
-    fileName={ocrResult.filename || ""}
-    fileUrl={ocrResult.file_url || ""}
-    detectedDocType={ocrResult.document_type || ""}
-    documentTypeConfidence={
-      ocrResult.document_type_confidence ?? null
-    }
-    onCancel={cancelOCR}
-    onSave={saveOCR}
-  />
-)}
-
+      {showOCRConfirmation && ocrResult && (
+        <OCRConfirmation
+          ocrResult={ocrResult}
+          studentId={studentId ?? ""}
+          studentName={studentName ?? ""}
+          fileName={ocrResult.filename || ""}
+          fileUrl={
+  ocrResult.image_data_url ||
+  ocrResult.file_url ||
+  ocrResult.fileUrl ||
+  ""
+}
+          detectedDocType={ocrResult.document_type || ""}
+          documentTypeConfidence={ocrResult.document_type_confidence ?? null}
+          preferredDocType={selectedCredential?.name || ""}
+          onCancel={cancelOCR}
+          onScanAgain={scanAgain}
+          onSave={saveOCR}
+        />
+      )}
     </>
   );
 }
