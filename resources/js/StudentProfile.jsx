@@ -1,17 +1,18 @@
+
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import DocumentScanner from "./DocumentScanner.jsx";
 import useDocumentScanner from "./useDocumentScanner";
 import { isPdf } from "./scannerUtils";
-import { logActivity } from "./activityLog"; // ADDED
+import { logActivity } from "./activityLog";
 import "./styles/Students.css";
 import "./styles/StudentProfile.css";
 import "./styles/Dashboard.css";
 
 const BUCKET = "student-documents";
 
-// Local folder server (creates C:\StudentRecords\...)
-const FOLDER_SERVER = "http://127.0.0.1:3001";
+// Local Flask scanner server.
+const FOLDER_SERVER = "http://127.0.0.1:5000";
 
 const statuses = ["Active", "LOA", "Inactive", "Graduated"];
 
@@ -37,8 +38,6 @@ const initialStudent = {
   status: "Active",
 };
 
-// Standard credential rows. Real uploads are loaded from
-// tbl_student_documents and merged into these rows.
 const credentialNames = [
   "Certification of Live Birth",
   "Form 138",
@@ -71,18 +70,14 @@ const safeFileName = (name) =>
     .replace(/^.*[\\/]/, "")
     .replace(/[^A-Za-z0-9._-]/g, "_");
 
-// Supabase storage folder. Must be a valid storage key, NOT the Windows
-// path saved in folder_path (C:\StudentRecords\...).
 const storageFolder = (s) => `students/${s.student_id}`;
 
-// "Birth Certificate" -> "birth_certificate" (subfolder per document type)
 const docSlug = (name) =>
   (name || "other")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "") || "other";
 
-// loose comparison: "Birth Certificate" == "birth_certificate"
 const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const MIME_BY_EXT = {
@@ -94,10 +89,14 @@ const MIME_BY_EXT = {
 };
 
 const mimeFromName = (name) =>
-  MIME_BY_EXT[(name || "").split("?")[0].split(".").pop().toLowerCase()] || "";
+  MIME_BY_EXT[
+    (name || "").split("?")[0].split(".").pop().toLowerCase()
+  ] || "";
 
 const looksPdf = (cred) =>
-  /\.pdf(\?|$)/i.test(cred.file_path || cred.file || cred.file_url || "");
+  /\.pdf(\?|$)/i.test(
+    cred.file_path || cred.file || cred.file_url || ""
+  );
 
 const statusClass = (status) => {
   switch (status) {
@@ -112,7 +111,8 @@ const statusClass = (status) => {
   }
 };
 
-const isVerified = (status) => status === "Verified" || status === "Active";
+const isVerified = (status) =>
+  status === "Verified" || status === "Active";
 
 const credStatusClass = (status) => {
   if (isVerified(status)) return "cred-verified";
@@ -124,36 +124,74 @@ const verifiedCount = (creds) =>
   creds.filter((c) => isVerified(c.status)).length;
 
 // ------------------------------------------------------------
-// File helpers
+// FILE HELPERS
 // ------------------------------------------------------------
 
-// Reads the scanned file from wherever the scanner left it:
-// an http/blob/data URL, or a path inside the Supabase bucket.
+// Reads a scanned file from a data URL, HTTP URL, blob URL,
+// or an existing path inside the Supabase Storage bucket.
 const readSourceBlob = async (sourceUrl) => {
-  if (!sourceUrl) throw new Error("The scanned file could not be found.");
+  if (!sourceUrl) {
+    throw new Error(
+      "The scanned image is missing. Please scan the document again."
+    );
+  }
 
   if (/^(https?:|blob:|data:)/i.test(sourceUrl)) {
     const res = await fetch(sourceUrl);
+
     if (!res.ok) {
-      throw new Error(`Could not read the scanned file (${res.status}).`);
+      throw new Error(
+        `Could not read the scanned file (${res.status}).`
+      );
     }
+
     return res.blob();
   }
 
-  const { data, error: dlError } = await supabase.storage
+  const { data, error: downloadError } = await supabase.storage
     .from(BUCKET)
     .download(sourceUrl);
-  if (dlError) throw dlError;
+
+  if (downloadError) throw downloadError;
+
   return data;
 };
 
 const blobToBase64 = (blob) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = () => reject(new Error("Could not read the file."));
+
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.split(",")[1] || "");
+    };
+
+    reader.onerror = () => {
+      reject(new Error("Could not read the scanned file."));
+    };
+
     reader.readAsDataURL(blob);
   });
+
+// Converts a Blob to a data URL accepted by the Flask /store-scan endpoint.
+const blobToDataUrl = (blob) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve(String(reader.result || ""));
+    };
+
+    reader.onerror = () => {
+      reject(new Error("Could not prepare the scanned image."));
+    };
+
+    reader.readAsDataURL(blob);
+  });
+
+// ------------------------------------------------------------
+// COMPONENT
+// ------------------------------------------------------------
 
 export default function StudentProfile({ studentId, onBack }) {
   const [student, setStudent] = useState(initialStudent);
@@ -173,8 +211,6 @@ export default function StudentProfile({ studentId, onBack }) {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editForm, setEditForm] = useState(initialStudent);
 
-  // Ref mirroring showEditModal so the realtime callback
-  // always sees the latest value
   const showEditModalRef = useRef(showEditModal);
 
   useEffect(() => {
@@ -182,64 +218,121 @@ export default function StudentProfile({ studentId, onBack }) {
   }, [showEditModal]);
 
   // ============================================================
-  // DOCUMENT STORAGE (one folder per student)
+  // DOCUMENT STORAGE
   // ============================================================
 
-  // Uploads to Supabase: students/<id>/<doc_type>/<time>_<name>
-  // This is the copy that Preview reads.
-  const uploadToStudentFolder = async ({ sourceUrl, fileName, documentName }) => {
+  // Upload the scanned document to Supabase.
+  // This path is stored in tbl_student_documents and used by Preview.
+  const uploadToStudentFolder = async ({
+    sourceUrl,
+    fileName,
+    documentName,
+  }) => {
     const folder = `${storageFolder(student)}/${docSlug(documentName)}`;
     const blob = await readSourceBlob(sourceUrl);
 
     let name = safeFileName(fileName);
-    if (!/\.[A-Za-z0-9]{2,5}$/.test(name) && EXT_BY_TYPE[blob.type]) {
-      name += "." + EXT_BY_TYPE[blob.type];
+
+    if (!/\.[A-Za-z0-9]{2,5}$/.test(name)) {
+      const extension = EXT_BY_TYPE[blob.type];
+
+      if (extension) {
+        name += `.${extension}`;
+      } else {
+        name += ".jpg";
+      }
     }
 
-    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const stamp = new Date()
+      .toISOString()
+      .replace(/\D/g, "")
+      .slice(0, 14);
+
     const path = `${folder}/${stamp}_${name}`;
+
+    const contentType =
+      blob.type || mimeFromName(name) || "image/jpeg";
 
     const { error: uploadError } = await supabase.storage
       .from(BUCKET)
       .upload(path, blob, {
-        contentType: blob.type || mimeFromName(name) || undefined,
+        contentType,
         upsert: false,
       });
 
     if (uploadError) throw uploadError;
-    return { path, blob, name };
+
+    return {
+      path,
+      blob,
+      name,
+    };
   };
 
-  // Copies the same file into
-  // C:\StudentRecords\<College>\<ID>_<Name>\<doc_type>\ through the
-  // local folder server.
-  const copyToLocalFolder = async ({ blob, name, documentName }) => {
+  // Save the actual scanned image into:
+  // C:\StudentRecords\<College>\<StudentID>_<StudentName>\
+  //
+  // This uses the /store-scan endpoint in app.py.
+  const saveToLocalFolder = async ({
+    blob,
+    name,
+    documentName,
+  }) => {
     const college =
-      colleges.find((c) => Number(c.college_id) === Number(student.college_id))
-        ?.college_name || "";
+      colleges.find(
+        (c) =>
+          Number(c.college_id) === Number(student.college_id)
+      )?.college_name || "";
 
-    const res = await fetch(`${FOLDER_SERVER}/save-document`, {
+    if (!college) {
+      throw new Error(
+        "The student's college could not be identified. Please check the student record."
+      );
+    }
+
+    if (!blob || !blob.type.startsWith("image/")) {
+      throw new Error(
+        "The scanner did not provide an image that can be saved to the local student folder."
+      );
+    }
+
+    const imageDataUrl = await blobToDataUrl(blob);
+
+    const response = await fetch(`${FOLDER_SERVER}/store-scan`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        student_id: student.student_id,
-        first_name: student.first_name,
-        middle_name: student.middle_name || "",
-        last_name: student.last_name,
-        college_name: college,
-        document_name: documentName,
-        file_name: name,
-        data_base64: await blobToBase64(blob),
+        image_data_url: imageDataUrl,
+        document_type: documentName,
+        student: {
+          student_id: student.student_id,
+          first_name: student.first_name || "",
+          middle_name: student.middle_name || "",
+          last_name: student.last_name || "",
+          college_name: college,
+        },
       }),
     });
 
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
-    return body.file_path;
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || !result.success || !result.stored_path) {
+      throw new Error(
+        result.error ||
+          result.message ||
+          `Could not save the scanned file to the local student folder (HTTP ${response.status}).`
+      );
+    }
+
+    return result.stored_path;
   };
 
-  // Loads the student's saved documents and merges them into the
-  // credential rows.
+  // ============================================================
+  // LOAD SAVED DOCUMENTS
+  // ============================================================
+
   const loadDocuments = async (sid) => {
     const { data, error: docError } = await supabase
       .from("tbl_student_documents")
@@ -255,26 +348,37 @@ export default function StudentProfile({ studentId, onBack }) {
     const seen = new Set();
 
     for (const row of data || []) {
-      // rows are newest first: only the latest upload per document type
+      // Rows are newest first: display only the latest upload
+      // for each document type.
       if (seen.has(row.document_id)) continue;
       seen.add(row.document_id);
 
-      const typeName = row.tbl_documents?.document_name || "Document";
+      const typeName =
+        row.tbl_documents?.document_name || "Document";
 
       const entry = {
         name: typeName,
-        date: row.date_uploaded ? row.date_uploaded.split("T")[0] : null,
-        // older rows were saved as "Active": show them as Verified
-        status: !row.status || row.status === "Active" ? "Verified" : row.status,
+        date: row.date_uploaded
+          ? row.date_uploaded.split("T")[0]
+          : null,
+        status:
+          !row.status || row.status === "Active"
+            ? "Verified"
+            : row.status,
         file: row.document_name,
         file_path: row.file_path,
         file_url: null,
       };
 
-      const idx = merged.findIndex((c) => norm(c.name) === norm(typeName));
+      const idx = merged.findIndex(
+        (c) => norm(c.name) === norm(typeName)
+      );
 
       if (idx >= 0) {
-        merged[idx] = { ...entry, name: merged[idx].name };
+        merged[idx] = {
+          ...entry,
+          name: merged[idx].name,
+        };
       } else {
         merged.push(entry);
       }
@@ -284,7 +388,7 @@ export default function StudentProfile({ studentId, onBack }) {
   };
 
   // ============================================================
-  // SCANNER (reusable hook)
+  // SCANNER
   // ============================================================
 
   const today = () => new Date().toISOString().split("T")[0];
@@ -292,9 +396,16 @@ export default function StudentProfile({ studentId, onBack }) {
   const scanner = useDocumentScanner({
     studentId: student.student_id,
 
-    // Called right after a successful scan: show the row as "Pending"
+    // Update the selected credential row after a scan.
     onScanned: (credential, result) => {
       if (!credential) return;
+
+      const previewSource =
+        result?.file_url ||
+        result?.fileUrl ||
+        result?.image_data_url ||
+        result?.imageDataUrl ||
+        "";
 
       setCredentials((prev) =>
         prev.map((cred) =>
@@ -303,28 +414,32 @@ export default function StudentProfile({ studentId, onBack }) {
                 ...cred,
                 date: today(),
                 status: "Pending",
-                file: result.filename,
-                file_url: result.file_url,
+                file: result?.filename || result?.fileName || cred.file,
+                file_url: previewSource || null,
               }
             : cred
         )
       );
     },
 
-    // Called when the OCR confirmation is cancelled or "Scan Again" is used:
-    // reload from the database so the "Pending" row goes back to what is
-    // really saved.
+    // Refresh the credential list if the scan is cancelled.
     onCancelled: () => {
       if (!student.student_id) return;
+
       loadDocuments(student.student_id).catch((err) =>
         console.warn("Could not refresh documents:", err)
       );
     },
 
     // Called when the OCR confirmation is saved.
-    // Returns true when saved, false when it failed (dialog stays open).
     onConfirmed: async (
-      { documentId, documentType, fileName, fileUrl },
+      {
+        documentId,
+        documentType,
+        fileName,
+        fileUrl,
+        imageDataUrl,
+      },
       selectedCredential
     ) => {
       let uploadedPath = null;
@@ -336,6 +451,20 @@ export default function StudentProfile({ studentId, onBack }) {
           throw new Error("No student is selected.");
         }
 
+        // Prefer the actual image data from OCR confirmation.
+        // This avoids trying to fetch an empty fileUrl.
+        const sourceUrl =
+          imageDataUrl ||
+          fileUrl ||
+          "";
+
+        if (!sourceUrl) {
+          throw new Error(
+            "The scanned image is missing. Please scan the document again and check the preview before saving."
+          );
+        }
+
+        // Resolve the document type ID.
         let docId = documentId;
 
         if (!docId && documentType) {
@@ -346,6 +475,7 @@ export default function StudentProfile({ studentId, onBack }) {
             .maybeSingle();
 
           if (docError) throw docError;
+
           docId = data?.document_id;
         }
 
@@ -355,80 +485,103 @@ export default function StudentProfile({ studentId, onBack }) {
           );
         }
 
-        // official name of the document type, e.g. "Birth Certificate"
-        const { data: docRow } = await supabase
+        // Fetch the official document type name.
+        const { data: docRow, error: docRowError } = await supabase
           .from("tbl_documents")
           .select("document_name")
           .eq("document_id", docId)
           .maybeSingle();
 
+        if (docRowError) throw docRowError;
+
         const typeName =
           docRow?.document_name ||
           documentType ||
           selectedCredential?.name ||
-          "other";
+          "Other";
 
-        // 1) store the scanned file in Supabase (this is what Preview reads)
+        // 1. Upload to Supabase.
+        // This is the file source used by the Preview button.
         const uploaded = await uploadToStudentFolder({
-          sourceUrl: fileUrl,
-          fileName,
+          sourceUrl,
+          fileName: fileName || `${docSlug(typeName)}.jpg`,
           documentName: typeName,
         });
+
         uploadedPath = uploaded.path;
 
-        // 2) save the record pointing at that path
+        // 2. Save a copy to the local student folder using Flask.
+        // Example:
+        // C:\StudentRecords\CEA\2026302405_Arielle_Vermoy_Dades\
+        const localPath = await saveToLocalFolder({
+          blob: uploaded.blob,
+          name: uploaded.name,
+          documentName: typeName,
+        });
+
+        // 3. Save the Supabase path in the database.
+        // Do not save the Windows path here because Preview downloads
+        // this file from Supabase Storage.
         const { error: insertError } = await supabase
           .from("tbl_student_documents")
           .insert({
             student_id: sid,
             document_id: docId,
-            document_name: (fileName || "").slice(0, 100) || null,
+            document_name:
+              (fileName || uploaded.name || `${typeName}.jpg`).slice(
+                0,
+                100
+              ) || null,
             file_path: uploadedPath,
             date_uploaded: new Date().toISOString(),
             status: "Verified",
           });
 
-        if (insertError) throw insertError;
+        if (insertError) {
+          throw new Error(
+            `The file was saved to the local folder at ${localPath}, but its database record could not be created: ${insertError.message}`
+          );
+        }
 
-        // ADDED: record in Audit Logs
+        // 4. Record the upload in Audit Logs.
         logActivity({
           type: "Upload",
           description: `Scanned and saved ${typeName} for student ${sid}`,
           module: "Documents Module",
         });
 
-        // 3) copy into the student's folder on this PC (best effort)
-        let localMessage = "";
-        try {
-          const localPath = await copyToLocalFolder({
-            blob: uploaded.blob,
-            name: uploaded.name,
-            documentName: typeName,
-          });
-          localMessage = `\nFolder copy: ${localPath}`;
-        } catch (localErr) {
-          console.warn("Local folder copy failed:", localErr);
-          localMessage =
-            "\nThe copy to the student's folder on this PC was skipped " +
-            "(is the folder server running?).";
-        }
-
-        // reload from the database so the document appears in its own
-        // row with the Preview button
+        // 5. Reload documents so the saved file appears in the table.
         await loadDocuments(sid);
 
-        alert(`Saved ${typeName}.${localMessage}`);
+        alert(
+          `Saved ${typeName} successfully.\n\nLocal folder:\n${localPath}`
+        );
+
         return true;
       } catch (err) {
         console.error("Save scanned document failed:", err);
 
-        // don't leave an orphan file behind if the record was not saved
+        // Remove the Supabase upload if the database save failed.
+        // The local file, if already saved, is not automatically removed.
         if (uploadedPath) {
-          await supabase.storage.from(BUCKET).remove([uploadedPath]);
+          const { error: removeError } = await supabase.storage
+            .from(BUCKET)
+            .remove([uploadedPath]);
+
+          if (removeError) {
+            console.warn(
+              "Could not remove the unused Supabase file:",
+              removeError
+            );
+          }
         }
 
-        alert(err.message || "Failed to save the scanned document.");
-        return false; // keep the confirmation dialog open to retry
+        alert(
+          err.message || "Failed to save the scanned document."
+        );
+
+        // Keep the OCR confirmation open so the user can retry.
+        return false;
       }
     },
   });
@@ -438,7 +591,11 @@ export default function StudentProfile({ studentId, onBack }) {
   // ============================================================
 
   useEffect(() => {
-    if (studentId === undefined || studentId === null || studentId === "") {
+    if (
+      studentId === undefined ||
+      studentId === null ||
+      studentId === ""
+    ) {
       setLoading(false);
       setError("No student selected.");
       return;
@@ -451,15 +608,24 @@ export default function StudentProfile({ studentId, onBack }) {
         setLoading(true);
         setError("");
 
-        const [collegeRes, programRes, studentRes] = await Promise.all([
-          supabase.from("tbl_college").select("*").order("college_name"),
-          supabase.from("tbl_program").select("*").order("program_name"),
-          supabase
-            .from("tbl_student")
-            .select("*")
-            .eq("student_id", studentId)
-            .single(),
-        ]);
+        const [collegeRes, programRes, studentRes] =
+          await Promise.all([
+            supabase
+              .from("tbl_college")
+              .select("*")
+              .order("college_name"),
+
+            supabase
+              .from("tbl_program")
+              .select("*")
+              .order("program_name"),
+
+            supabase
+              .from("tbl_student")
+              .select("*")
+              .eq("student_id", studentId)
+              .single(),
+          ]);
 
         if (collegeRes.error) throw collegeRes.error;
         if (programRes.error) throw programRes.error;
@@ -489,6 +655,7 @@ export default function StudentProfile({ studentId, onBack }) {
     return () => {
       cancelled = true;
     };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
@@ -497,7 +664,11 @@ export default function StudentProfile({ studentId, onBack }) {
   // ============================================================
 
   useEffect(() => {
-    if (studentId === undefined || studentId === null || studentId === "") {
+    if (
+      studentId === undefined ||
+      studentId === null ||
+      studentId === ""
+    ) {
       return;
     }
 
@@ -518,7 +689,6 @@ export default function StudentProfile({ studentId, onBack }) {
             return;
           }
 
-          // INSERT or UPDATE
           setStudent(payload.new);
 
           if (!showEditModalRef.current) {
@@ -539,7 +709,10 @@ export default function StudentProfile({ studentId, onBack }) {
 
   const handleEditChange = (field, value) => {
     setEditForm((prev) => {
-      const updated = { ...prev, [field]: value };
+      const updated = {
+        ...prev,
+        [field]: value,
+      };
 
       if (field === "college_id") {
         updated.program_id = "";
@@ -561,9 +734,15 @@ export default function StudentProfile({ studentId, onBack }) {
         birthdate: editForm.birthdate || null,
         gender: editForm.gender || null,
         email: editForm.email || null,
-        college_id: editForm.college_id ? Number(editForm.college_id) : null,
-        program_id: editForm.program_id ? Number(editForm.program_id) : null,
-        year_level: editForm.year_level ? Number(editForm.year_level) : null,
+        college_id: editForm.college_id
+          ? Number(editForm.college_id)
+          : null,
+        program_id: editForm.program_id
+          ? Number(editForm.program_id)
+          : null,
+        year_level: editForm.year_level
+          ? Number(editForm.year_level)
+          : null,
         status: editForm.status || null,
       };
 
@@ -576,7 +755,6 @@ export default function StudentProfile({ studentId, onBack }) {
 
       if (updateError) throw updateError;
 
-      // ADDED: record in Audit Logs
       logActivity({
         type: "Update",
         description: `Updated information of student ${editForm.student_id}`,
@@ -599,22 +777,30 @@ export default function StudentProfile({ studentId, onBack }) {
   // ============================================================
 
   const filteredPrograms = programs.filter(
-    (program) => Number(program.college_id) === Number(editForm.college_id)
+    (program) =>
+      Number(program.college_id) === Number(editForm.college_id)
   );
 
   const collegeName =
-    colleges.find((c) => Number(c.college_id) === Number(student.college_id))
-      ?.college_name || "—";
+    colleges.find(
+      (c) => Number(c.college_id) === Number(student.college_id)
+    )?.college_name || "—";
 
   const programName =
-    programs.find((p) => Number(p.program_id) === Number(student.program_id))
-      ?.program_name || "—";
+    programs.find(
+      (p) => Number(p.program_id) === Number(student.program_id)
+    )?.program_name || "—";
 
   const yearName =
-    yearLevels.find((y) => Number(y.value) === Number(student.year_level))
-      ?.label || "—";
+    yearLevels.find(
+      (y) => Number(y.value) === Number(student.year_level)
+    )?.label || "—";
 
-  const fullName = [student.first_name, student.middle_name, student.last_name]
+  const fullName = [
+    student.first_name,
+    student.middle_name,
+    student.last_name,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -632,8 +818,12 @@ export default function StudentProfile({ studentId, onBack }) {
 
   const closePreview = () => {
     setShowPreviewModal(false);
+
     setPreviewCred((prev) => {
-      if (prev?.blob_url) URL.revokeObjectURL(prev.blob_url);
+      if (prev?.blob_url) {
+        URL.revokeObjectURL(prev.blob_url);
+      }
+
       return null;
     });
   };
@@ -646,50 +836,75 @@ export default function StudentProfile({ studentId, onBack }) {
     let pdf = looksPdf(cred);
     let previewError = "";
 
-    // Files in the student's folder are private, so download them with the
-    // signed-in session and show them from a local blob.
+    // Download the private Supabase Storage file and display it
+    // using a temporary browser blob URL.
     if (!url && cred.file_path) {
       try {
         if (/^https?:\/\//i.test(cred.file_path)) {
-          // older record not yet moved into a student folder
-          url = cred.file_path;
-
+          // Compatibility with older records containing a URL.
           try {
             const res = await fetch(cred.file_path);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-            let blob = await res.blob();
-            if (!blob.type || blob.type === "application/octet-stream") {
-              const guessed = mimeFromName(cred.file_path);
-              if (guessed) blob = new Blob([blob], { type: guessed });
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status}`);
             }
 
-            if (blob.type === "application/pdf") pdf = true;
+            let blob = await res.blob();
+
+            if (
+              !blob.type ||
+              blob.type === "application/octet-stream"
+            ) {
+              const guessed = mimeFromName(cred.file_path);
+
+              if (guessed) {
+                blob = new Blob([blob], { type: guessed });
+              }
+            }
+
+            if (blob.type === "application/pdf") {
+              pdf = true;
+            }
+
             blobUrl = URL.createObjectURL(blob);
             url = blobUrl;
           } catch (fetchErr) {
-            // keep the direct link; the <img> reports it if it fails too
-            console.warn("Old file link could not be fetched:", fetchErr);
+            console.warn(
+              "Old file link could not be fetched:",
+              fetchErr
+            );
           }
         } else {
-          const { data, error: dlError } = await supabase.storage
-            .from(BUCKET)
-            .download(cred.file_path);
+          const { data, error: downloadError } =
+            await supabase.storage
+              .from(BUCKET)
+              .download(cred.file_path);
 
-          if (dlError) throw dlError;
+          if (downloadError) throw downloadError;
 
           let blob = data;
-          if (!blob.type || blob.type === "application/octet-stream") {
+
+          if (
+            !blob.type ||
+            blob.type === "application/octet-stream"
+          ) {
             const guessed = mimeFromName(cred.file_path);
-            if (guessed) blob = new Blob([data], { type: guessed });
+
+            if (guessed) {
+              blob = new Blob([data], { type: guessed });
+            }
           }
 
-          if (blob.type === "application/pdf") pdf = true;
+          if (blob.type === "application/pdf") {
+            pdf = true;
+          }
+
           blobUrl = URL.createObjectURL(blob);
           url = blobUrl;
         }
       } catch (err) {
         console.error("Preview failed:", err);
+
         previewError =
           (err && (err.message || err.error_description)) ||
           "Could not load the file.";
@@ -703,9 +918,9 @@ export default function StudentProfile({ studentId, onBack }) {
       is_pdf: pdf,
       preview_error: previewError,
     });
+
     setShowPreviewModal(true);
 
-    // ADDED: record in Audit Logs
     logActivity({
       type: "View",
       description: `Viewed ${cred.name} of student ${student.student_id}`,
@@ -776,7 +991,9 @@ export default function StudentProfile({ studentId, onBack }) {
                 {fullName || "No Student Name"}
               </h2>
 
-              <p className="profile-student-id">{student.student_id}</p>
+              <p className="profile-student-id">
+                {student.student_id}
+              </p>
 
               <div className="profile-student-meta">
                 <span className={statusClass(student.status)}>
@@ -839,7 +1056,9 @@ export default function StudentProfile({ studentId, onBack }) {
         {/* CREDENTIALS */}
         <div className="credentials-card">
           <div className="credentials-header">
-            <h3 className="credentials-title">Credential Documents</h3>
+            <h3 className="credentials-title">
+              Credential Documents
+            </h3>
 
             <span className="credentials-count">
               {verifiedCount(credentials)}/{credentials.length} verified
@@ -849,9 +1068,13 @@ export default function StudentProfile({ studentId, onBack }) {
           <table className="credentials-table">
             <thead>
               <tr className="credentials-thead">
-                <th className="credentials-th-first">Credential Name</th>
+                <th className="credentials-th-first">
+                  Credential Name
+                </th>
                 <th className="credentials-th">Upload Date</th>
-                <th className="credentials-th">Verification Status</th>
+                <th className="credentials-th">
+                  Verification Status
+                </th>
                 <th className="credentials-th">File Attachment</th>
                 <th className="credentials-th">Action</th>
               </tr>
@@ -862,12 +1085,18 @@ export default function StudentProfile({ studentId, onBack }) {
                 <tr
                   key={cred.name}
                   className={
-                    i % 2 === 0 ? "credentials-row-even" : "credentials-row-odd"
+                    i % 2 === 0
+                      ? "credentials-row-even"
+                      : "credentials-row-odd"
                   }
                 >
-                  <td className="credentials-td-first">{cred.name}</td>
+                  <td className="credentials-td-first">
+                    {cred.name}
+                  </td>
 
-                  <td className="credentials-td">{cred.date ?? "—"}</td>
+                  <td className="credentials-td">
+                    {cred.date ?? "—"}
+                  </td>
 
                   <td className="credentials-td">
                     <span className={credStatusClass(cred.status)}>
@@ -909,7 +1138,7 @@ export default function StudentProfile({ studentId, onBack }) {
         </div>
       </div>
 
-      {/* SCAN MODAL + OCR CONFIRMATION (reusable) */}
+      {/* SCAN MODAL + OCR CONFIRMATION */}
       <DocumentScanner
         scanner={scanner}
         studentId={student.student_id}
@@ -924,33 +1153,43 @@ export default function StudentProfile({ studentId, onBack }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="preview-modal-header">
-              <h3 className="preview-modal-title">{previewCred.name}</h3>
+              <h3 className="preview-modal-title">
+                {previewCred.name}
+              </h3>
 
-              <span className="text-xs text-gray-400">{previewCred.file}</span>
+              <span className="text-xs text-gray-400">
+                {previewCred.file}
+              </span>
             </div>
 
             <div className="preview-modal-body">
               {previewCred.file_url ? (
-                previewCred.is_pdf || isPdf(previewCred.file_url) ? (
+                previewCred.is_pdf ||
+                isPdf(previewCred.file_url) ? (
                   <iframe
                     title={previewCred.name}
                     src={previewCred.file_url}
-                    style={{ width: "100%", height: "500px", border: 0 }}
+                    style={{
+                      width: "100%",
+                      height: "500px",
+                      border: 0,
+                    }}
                   />
                 ) : (
                   <img
                     src={previewCred.file_url}
                     alt={previewCred.name}
                     onError={() =>
-                      setPreviewCred(
-                        (prev) =>
-                          prev && {
-                            ...prev,
-                            file_url: null,
-                            preview_error: `the file link did not load (${
-                              prev.file_path || "unknown path"
-                            })`,
-                          }
+                      setPreviewCred((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              file_url: null,
+                              preview_error: `The file link did not load (${
+                                prev.file_path || "unknown path"
+                              }).`,
+                            }
+                          : prev
                       )
                     }
                     style={{
@@ -978,7 +1217,10 @@ export default function StudentProfile({ studentId, onBack }) {
             </div>
 
             <div className="preview-modal-footer">
-              <button className="preview-close-btn" onClick={closePreview}>
+              <button
+                className="preview-close-btn"
+                onClick={closePreview}
+              >
                 Close
               </button>
 
@@ -1000,7 +1242,10 @@ export default function StudentProfile({ studentId, onBack }) {
 
       {/* EDIT INFORMATION MODAL */}
       {showEditModal && (
-        <div className="modal-overlay" onClick={() => setShowEditModal(false)}>
+        <div
+          className="modal-overlay"
+          onClick={() => setShowEditModal(false)}
+        >
           <div
             className="edit-modal-card"
             onClick={(e) => e.stopPropagation()}
@@ -1063,12 +1308,16 @@ export default function StudentProfile({ studentId, onBack }) {
                 <select
                   className="edit-select"
                   value={editForm.gender || ""}
-                  onChange={(e) => handleEditChange("gender", e.target.value)}
+                  onChange={(e) =>
+                    handleEditChange("gender", e.target.value)
+                  }
                 >
                   <option value="">Select Gender</option>
                   <option value="Female">Female</option>
                   <option value="Male">Male</option>
-                  <option value="Prefer not to say">Prefer not to say</option>
+                  <option value="Prefer not to say">
+                    Prefer not to say
+                  </option>
                 </select>
               </div>
 
@@ -1091,7 +1340,9 @@ export default function StudentProfile({ studentId, onBack }) {
                 <select
                   className="edit-select"
                   value={editForm.status || ""}
-                  onChange={(e) => handleEditChange("status", e.target.value)}
+                  onChange={(e) =>
+                    handleEditChange("status", e.target.value)
+                  }
                 >
                   {statuses.map((status) => (
                     <option key={status} value={status}>
@@ -1111,6 +1362,7 @@ export default function StudentProfile({ studentId, onBack }) {
                   }
                 >
                   <option value="">Select Year</option>
+
                   {yearLevels.map((year) => (
                     <option key={year.value} value={year.value}>
                       {year.label}
@@ -1131,8 +1383,12 @@ export default function StudentProfile({ studentId, onBack }) {
                   }
                 >
                   <option value="">Select College</option>
+
                   {colleges.map((college) => (
-                    <option key={college.college_id} value={college.college_id}>
+                    <option
+                      key={college.college_id}
+                      value={college.college_id}
+                    >
                       {college.college_name}
                     </option>
                   ))}
@@ -1150,8 +1406,12 @@ export default function StudentProfile({ studentId, onBack }) {
                   disabled={!editForm.college_id}
                 >
                   <option value="">Select Program</option>
+
                   {filteredPrograms.map((program) => (
-                    <option key={program.program_id} value={program.program_id}>
+                    <option
+                      key={program.program_id}
+                      value={program.program_id}
+                    >
                       {program.program_name}
                     </option>
                   ))}
@@ -1164,7 +1424,9 @@ export default function StudentProfile({ studentId, onBack }) {
               className="edit-input"
               type="email"
               value={editForm.email || ""}
-              onChange={(e) => handleEditChange("email", e.target.value)}
+              onChange={(e) =>
+                handleEditChange("email", e.target.value)
+              }
             />
 
             <div className="edit-footer">
